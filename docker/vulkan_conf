@@ -1,0 +1,39 @@
+docker run --rm -it --runtime=nvidia --gpus all \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e VK_LOADER_LAYERS_DISABLE=VK_LAYER_MESA_device_select \
+  -v /etc/vulkan/icd.d/nvidia_icd.json:/etc/vulkan/icd.d/nvidia_icd.json:ro \
+  -v /lib/x86_64-linux-gnu:/host_lib:ro \
+  -v /usr/lib/x86_64-linux-gnu:/host_usr_lib:ro \
+  -e LD_LIBRARY_PATH=/host_lib:/host_usr_lib \
+  nvidia/cuda:12.8.0-base-ubuntu22.04 bash -lc '
+    apt-get update >/dev/null && apt-get install -y >/dev/null \
+      vulkan-tools libvulkan1 binutils
+
+    # Create an ICD that points to the *mounted* NVIDIA library by absolute path
+    cat > /tmp/nvidia_icd_abs.json <<EOF
+{
+  "file_format_version": "1.0.1",
+  "ICD": {
+    "library_path": "/host_lib/libGLX_nvidia.so.0",
+    "api_version": "1.4.303"
+  }
+}
+EOF
+    export VK_ICD_FILENAMES=/tmp/nvidia_icd_abs.json
+
+    echo "ICD used:"
+    cat /tmp/nvidia_icd_abs.json
+    echo
+
+    echo "Check NVIDIA Vulkan-related libs on host (mounted):"
+    ls -l /host_usr_lib/libnvidia-vulkan* \
+          /host_usr_lib/libnvidia-vulkan-producer* \
+          /host_usr_lib/libnvidia-glvkspirv* 2>/dev/null || true
+    echo
+
+    echo "Does libGLX_nvidia export the ICD entrypoint?"
+    nm -D /host_lib/libGLX_nvidia.so.0 | grep -E "vk_icdGetInstanceProcAddr|vk_icdNegotiateLoaderICDInterfaceVersion" || true
+    echo
+
+    VK_LOADER_DEBUG=error,warn vulkaninfo --summary | sed -n "1,200p"
+  '

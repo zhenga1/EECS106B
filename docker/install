@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -e
+
+VENV_DIR="${VIRTUAL_ENV:-/opt/venv}"
+REQ_FILE="${OMNI_VENV_REQUIREMENTS:-/opt/venv_requirements.txt}"
+
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+  /opt/conda/envs/sim/bin/python -m venv "${VENV_DIR}"
+fi
+source "${VENV_DIR}/bin/activate"
+
+pip install --upgrade pip
+pip install usd-core==25.11 xxhash==3.6.0 starlette==0.49.1 tqdm==4.67.1 tensordict==0.10.0 torchrl==0.10.1
+
+
+cd /workspace/isaacsim
+echo "Isaac Sim path: ${ISAACSIM_PATH}"
+./post_install.sh
+
+cd /workspace
+
+# check omni_drones already exists, if it does then skip this. else clone it and install the dependencies
+if [ -d "/workspace/omni_drones" ]; then
+  echo "OmniDrones already exists, skipping clone"
+else
+  echo "OmniDrones does not exist, cloning it"
+  mkdir -p /root/.ssh
+  chmod 700 /root/.ssh
+  ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+  git clone -b users/mrunal/racing git@github.com:arplaboratory/OmniDrones.git omni_drones
+  cd /workspace/omni_drones
+  git submodule update --init --recursive
+
+  mkdir -p /workspace/omni_drones/third_party/IsaacLab
+  ln -sfn /workspace/isaacsim /workspace/omni_drones/third_party/IsaacLab/_isaac_sim
+fi
+
+cd /workspace/omni_drones/third_party/IsaacLab
+./isaaclab.sh --install
+
+cd /workspace/omni_drones
+pip install -e .
+
+# pip freeze > "${REQ_FILE}"

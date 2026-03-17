@@ -1,0 +1,47 @@
+name: arpl_race
+inertia:
+  xx: 0.00304475
+  xy: 0.0
+  xz: 0.0
+  yy: 0.00454981
+  yz: 0.0
+  zz: 0.00281995
+mass: 1.324
+# l: 0.5
+drag_coef: 0.0
+rotor_configuration:
+  arm_lengths:
+    - 0.126
+    - 0.126
+    - 0.126
+    - 0.126
+  directions:
+    - 1.0
+    - 1.0
+    - -1.0
+    - -1.0
+  force_constants:
+    - 2.52e-08
+    - 2.52e-08
+    - 2.52e-08
+    - 2.52e-08
+  max_rotation_velocities:
+    - 2513
+    - 2513
+    - 2513
+    - 2513
+  moment_constants:
+    - 2.92e-10
+    - 2.92e-10
+    - 2.92e-10
+    - 2.92e-10
+  num_rotors: 4
+  rotor_angles:
+    - -0.785398
+    - 2.35619
+    - 0.785398
+    - -2.35619
+  max_body_rates:
+    - 3.0 # rad/s
+    - 3.0 # rad/s
+    - 3.0 # rad/s

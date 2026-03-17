@@ -1,0 +1,33 @@
+name: Hover
+
+defaults:
+  # see https://hydra.cc/docs/advanced/overriding_packages/
+  - /base/env_base@_here_
+  - /base/sim_base@_here_
+
+env:
+  num_envs: 3000
+  env_spacing: 6
+  max_episode_length: 1000
+
+sim:
+  substeps: 5   # overrides the default of 5
+  dt: 0.002 
+
+total_frames: 10_000_000
+save_interval: 20
+seed: 0
+
+
+drone_model:
+  name: Iris
+  controller: RateController
+
+time_encoding: true
+
+reward_effort_weight: 0.1
+reward_action_smoothness_weight: 0.0
+reward_motion_smoothness_weight: 0.0
+reward_distance_scale: 1.2
+
+# action_transform: rate

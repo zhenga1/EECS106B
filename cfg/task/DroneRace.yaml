@@ -1,0 +1,142 @@
+name: DroneRaceEnv
+
+defaults:
+  # see https://hydra.cc/docs/advanced/overriding_packages/
+  - /base/env_base@_here_
+  - /base/sim_base@_here_
+
+# Task-specific PPO overrides. Points to a file in cfg/algo/ that is merged
+# over the default ppo.yaml when this task is loaded.
+ppo_cfg: DroneRace.yaml
+
+env:
+  num_envs: 500            # <-- EDIT: number of parallel environments
+  max_episode_length: 500 # <-- EDIT: max steps per episode before truncation
+
+sim:
+  substeps: 5   # overrides the default of 5
+  dt: 0.002 
+  
+drone_model:
+  name: Iris
+  controller: RateController
+
+total_frames: 200_000_000
+save_interval: 100 
+# seed: 0
+
+# Track configuration: config-based track with custom gate positions and orientations
+# Gate's local x axis is perpendicular to surface. Center is on the bottom middle. 
+# Circular track 
+track_config:
+  "1":
+    pos: [0.0, 0.0, 1.0]
+    yaw: 1.57
+  "2":
+    pos: [5.0, 5.0, 1.0]
+    yaw: 0
+  "3":
+    pos: [10.0, 0.0, 1.0]
+    yaw: -1.57
+  "4":
+    pos: [5.0, -5.0, 1.0]
+    yaw: 3.14  # pi
+  "5":
+    pos: [0.0, 0.0, 1.0]
+    yaw: 1.57
+
+# Figure 8 
+# track_config:
+#   "1":
+#     pos: [0.0, 0.0, 1.0]
+#     yaw: 1.57
+#   "2":
+#     pos: [2.0, 3.0, 1.0]
+#     yaw: 0
+#   "3":
+#     pos: [10.0, -3.0, 1.0]
+#     yaw: 0
+#   "4":
+#     pos: [12.0, 0.0, 1.0]
+#     yaw: 1.57
+#   "5":
+#     pos: [10.0, 3.0, 1.0]
+#     yaw: 3.14
+#   "6":
+#     pos: [2.0, -3.0, 1.0]
+#     yaw: 3.14
+#   "7":
+#     pos: [0.0, 0.0, 1.0]
+#     yaw: 1.57
+
+# Race track
+# track_config:
+#   "1":
+#     pos: [14.0, 34.0, 1.0]
+#     yaw: 0.0
+
+#   "2":
+#     pos: [20.0, 30.0, 1.0]
+#     yaw: -0.78
+
+#   "3":
+#     pos: [21.0, 22.0, 1.0]
+#     yaw: -1.049
+
+#   "4":
+#     pos: [24.0, 12.0, 1.0]
+#     yaw: -1.57
+
+#   "5":
+#     pos: [19.0, 6.0, 1.0]
+#     yaw: 2.97
+
+#   "6":
+#     pos: [14.0, 14.0, 1.0]
+#     yaw: 3.14
+
+#   "7":
+#     pos: [9.0, 6.0, 3.0]
+#     yaw: 4.54 
+
+#   "8":
+#     pos: [9.0, 6.0, 1.0]
+#     yaw: 1.40     
+
+#   "9":
+#     pos: [8.0, 14.0, 1.0]
+#     yaw: 1.74   #  + 180 deg
+
+#   "10":
+#     pos: [6.0, 22.0, 1.0]
+#     yaw: 1.40
+
+#   "11":
+#     pos: [8.0, 30.0, 3.0]
+#     yaw: 0.78
+
+#   "12":
+#     pos: [8.0, 30.0, 1.0]
+#     yaw: 0.78
+
+#   "13":
+#     pos: [14.0, 34.0, 1.0]
+#     yaw: 0.0
+    
+# Gate settings
+gate_scale: 1.0
+gate_height: 1.5 
+gate_width: 1.5 
+
+# ---- STUDENT EDIT: reward hyperparameters --------------------------------
+# Add one line per reward scale you define in drone_race.py __init__.
+# They are read via cfg.task.get("key", default). Rename / extend as needed.
+#
+reward_example: 0.5          # <-- EDIT or replace with your own reward scales
+# reward_progress_scale: 1.0
+# reward_gate_passage: 10.0
+# reward_crash_scale: 5.0
+# --------------------------------------------------------------------------
+
+debug_gate_origins: false
+debug_axis_length: 0.5

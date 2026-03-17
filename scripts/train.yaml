@@ -1,0 +1,39 @@
+# hydra.job.chdir: false
+hydra:
+  searchpath:
+    # see https://hydra.cc/docs/advanced/search_path/
+    - file://../cfg
+  run:
+    dir: /workspace/omni_drones/.hydra_outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+headless: true
+
+sim: ${task.sim}
+env: ${task.env}
+
+total_frames: ${oc.select:task.total_frames,1000}
+max_iters: -1
+eval_interval: -1
+save_interval: ${oc.select:task.save_interval,100}
+seed: 0
+
+viewer:
+  resolution: [960, 720]
+  eye: [8, 0., 6.]
+  lookat: [0., 0., 1.]
+
+wandb:
+  group: ${oc.select:..task.name}
+  run_name: ${oc.select:..task.name,test}-${oc.select:..algo.name,none}
+  job_type: train
+  entity:
+  project: omnidrones
+  mode: online # set to 'disabled' when debugging locally
+  run_id:
+  monitor_gym: True
+  tags:
+
+defaults:
+  - task: Hover
+  - algo: ppo
+  - _self_
