@@ -125,8 +125,8 @@ track_config:
     
 # Gate settings
 gate_scale: 1.0
-gate_height: 1.5 
-gate_width: 1.5 
+gate_height: 2.5 
+gate_width: 2.5 
 
 # ---- STUDENT EDIT: reward hyperparameters --------------------------------
 # Add one line per reward scale you define in drone_race.py __init__.

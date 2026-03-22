@@ -106,7 +106,7 @@ class DroneRaceEnv(IsaacEnv):
         # User can override this in config: gate_asset_path: "path/to/gate.usd"
         # If not specified, defaults to gate/gate.usd (isaac_drone_racer style)
         # Gate asset is in ASSET_PATH/gate/gate.usd
-        self.gate_asset_path = cfg.task.get("gate_asset_path", ASSET_PATH + "/gate/gate.usd")
+        self.gate_asset_path = cfg.task.get("gate_asset_path", ASSET_PATH + "/gate/gate_a2rl.usd")
         
         # Track configuration: support both config-based and circular track
         self.track_config = cfg.task.get("track_config", None)
