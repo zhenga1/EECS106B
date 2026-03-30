@@ -838,12 +838,6 @@ class DroneRaceEnv(IsaacEnv):
             gate_env_pos, gate_env_rot, batch_indices,
         )
 
-        # --- crash update ---
-        # Suppress collision detection for the first few steps after a reset
-        # to avoid phantom contact forces from the teleportation.
-        contact_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
-        crashed_collision = contact_forces.any(dim=-1).squeeze(-1)  # (N,)
-
         # -----------------------------------------------------------------------
         # STUDENT TODO (2/3): Implement your reward function.
         #
@@ -876,13 +870,7 @@ class DroneRaceEnv(IsaacEnv):
 
         # -----------------------------------------------------------------------
         # STUDENT TODO (3/3): Implement the crash / termination condition.
-        #
-        # `crashed_collision` (computed above) is True when the physics engine
-        # detects contact forces on the drone body.  You may also add geometric
-        # out-of-bounds checks, for example:
-        #   crashed_floor    = drone_pos_flat[:, 2] < 0.3
-        #   crashed_far      = distance_to_gate > some_threshold
-        # Combine conditions with | (logical OR) into a single bool tensor (N,).
+        # You might need to add geometric out-of-bounds checks.
         # -----------------------------------------------------------------------
         # ----- ADD YOUR CRASH CONDITION BELOW (replace the placeholder) -----
 
