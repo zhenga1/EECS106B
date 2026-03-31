@@ -27,6 +27,8 @@ save_interval: 100
 
 # Track configuration: config-based track with custom gate positions and orientations
 # Gate's local x axis is perpendicular to surface. Center is on the bottom middle. 
+# IMPORTANT: The last gate should be the exact same pos and yaw as the first gate. 
+
 # Circular track 
 track_config:
   "1":
