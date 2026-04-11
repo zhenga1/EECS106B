@@ -45,7 +45,7 @@ from torchrl.envs.transforms import TransformedEnv, InitTracker, Compose
 #         torch.cuda.manual_seed(seed)
 #         torch.cuda.manual_seed_all(seed)
 
-@hydra.main(version_base=None, config_path=".", config_name="train")
+@hydra.main(version_base=None, config_path="../cfg", config_name="train")
 def main(cfg):
     OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.resolve(cfg)
