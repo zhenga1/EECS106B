@@ -134,10 +134,18 @@ gate_width: 2.5
 # Add one line per reward scale you define in drone_race.py __init__.
 # They are read via cfg.task.get("key", default). Rename / extend as needed.
 #
-reward_example: 0.5          # <-- EDIT or replace with your own reward scales
+# reward_example: 0.5          # <-- EDIT or replace with your own reward scales
 # reward_progress_scale: 1.0
 # reward_gate_passage: 10.0
 # reward_crash_scale: 5.0
+
+reward_progress_scale: 1.0     # reward per metre closer to the gate
+reward_gate_passage: 10.0      # one-time bonus for passing through a gate
+reward_crash_scale: 10.0       # penalty applied on crash termination
+reward_time_penalty: 0.01      # small per-step cost to encourage speed
+reward_smoothness_scale: 0.001 # penalty on action rate-of-change
+reward_alignment_scale: 0.3    # reward for velocity pointing toward gate
+reward_completion_bonus: 50.0  # large bonus for completing the full lap
 # --------------------------------------------------------------------------
 
 debug_gate_origins: false

@@ -101,7 +101,20 @@ class DroneRaceEnv(IsaacEnv):
         # -----------------------------------------------------------------------
         # ----- ADD YOUR REWARD CONFIG LINES BELOW (replace / extend the example) -----
 
-        self.reward_example = cfg.task.get("reward_example", 0.5)
+        # Progress reward: bonus for reducing distance to next gate
+        self.reward_progress_scale = cfg.task.get("reward_progress_scale", 1.0)
+        # Gate passage: one-time bonus for flying through a gate
+        self.reward_gate_passage = cfg.task.get("reward_gate_passage", 10.0)
+        # Crash penalty: applied on termination due to crash
+        self.reward_crash_scale = cfg.task.get("reward_crash_scale", 10.0)
+        # Time penalty: small cost per step to encourage speed
+        self.reward_time_penalty = cfg.task.get("reward_time_penalty", 0.01)
+        # Action smoothness: penalise large action changes between steps
+        self.reward_smoothness_scale = cfg.task.get("reward_smoothness_scale", 0.001)
+        # Velocity alignment: reward velocity pointing toward the gate
+        self.reward_alignment_scale = cfg.task.get("reward_alignment_scale", 0.3)
+        # Lap completion bonus
+        self.reward_completion_bonus = cfg.task.get("reward_completion_bonus", 50.0)
 
         # ----- END STUDENT CODE -----
 
@@ -782,7 +795,13 @@ class DroneRaceEnv(IsaacEnv):
         # Type: bool is preferred (True/False); equivalent to 1/0 when cast to int/float.
         # Gate width and height can be accessed by using self.gate_width and self.gate_height.
         # ----- ADD YOUR GATE-CROSSING MASK CODE BELOW (replace the placeholder) -----
-        gates_passed_successfully = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        # Gate crossing: drone crossed the gate plane (x: neg->pos) AND is within the
+        # gate's bounding box in the gate-local y-z plane.
+        within_y = torch.abs(curr_in_gate[..., 1]) < (self.gate_width / 2.0)
+        within_z = torch.abs(curr_in_gate[..., 2]) < (self.gate_height / 2.0)
+        gates_passed_successfully = crossed_plane & within_y & within_z
+
         # ----- END STUDENT CODE -----
         
         gate_passed_this_step = gates_passed_successfully & (~self.gate_passed)
@@ -881,7 +900,53 @@ class DroneRaceEnv(IsaacEnv):
         # -----------------------------------------------------------------------
         # ----- ADD YOUR REWARD CODE BELOW (replace the placeholder) -----
 
-        reward = torch.zeros(self.num_envs, device=self.device)  # (N,) ← replace this
+        # 1. Progress reward: reward for getting closer to the current gate
+        #    After a gate pass, new_gate_center has already been updated, so use
+        #    prev_distance vs current distance to the *new* target gate.
+        new_distance = torch.norm(drone_pos_flat - new_gate_center, dim=-1)  # (N,)
+        progress_reward = (self.prev_distance_to_gate - new_distance) * self.reward_progress_scale
+        # Clamp to avoid huge spikes when gate index changes (distance jumps)
+        progress_reward = torch.where(
+            gate_index_changed, torch.zeros_like(progress_reward), progress_reward
+        )
+
+        # 2. Velocity alignment: reward velocity component pointing toward gate
+        drone_vel_world = self.drone.vel[..., :3].squeeze(1)  # (N, 3) linear vel in body frame
+        drone_rot_flat = drone_rot.squeeze(1)  # (N, 4)
+        drone_vel_env = quat_rotate(drone_rot_flat, drone_vel_world)  # rotate to env frame
+        dir_to_gate = new_gate_center - drone_pos_flat
+        dir_to_gate_norm = dir_to_gate / (torch.norm(dir_to_gate, dim=-1, keepdim=True) + 1e-8)
+        vel_toward_gate = torch.sum(drone_vel_env * dir_to_gate_norm, dim=-1)  # (N,)
+        alignment_reward = torch.clamp(vel_toward_gate, min=0.0) * self.reward_alignment_scale
+
+        # 3. Gate passage bonus
+        gate_bonus = gate_passed_this_step.float() * self.reward_gate_passage  # (N,)
+
+        # 4. Time penalty (encourage speed)
+        time_penalty = -self.reward_time_penalty  # scalar, broadcast
+
+        # 5. Action smoothness
+        current_action = self.drone.get_joint_velocities()  # proxy for motor commands
+        action_diff = torch.norm(
+            (current_action - self.last_action).squeeze(1), dim=-1
+        )  # (N,)
+        smooth_penalty = -action_diff * self.reward_smoothness_scale
+
+        # 6. Lap completion bonus
+        completion_bonus = self.track_completed.float() * self.reward_completion_bonus
+
+        reward = (
+            progress_reward
+            + alignment_reward
+            + gate_bonus
+            + time_penalty
+            + smooth_penalty
+            + completion_bonus
+        )  # (N,)
+
+        # Update state for next step
+        self.prev_distance_to_gate = new_distance.detach()
+        self.last_action = current_action.detach()
 
         # ----- END STUDENT CODE -----
 
@@ -891,7 +956,27 @@ class DroneRaceEnv(IsaacEnv):
         # -----------------------------------------------------------------------
         # ----- ADD YOUR CRASH CONDITION BELOW (replace the placeholder) -----
 
-        crashed = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)  # (N,) ← replace this
+        # a) Ground collision: drone below safe altitude
+        ground_crash = drone_pos_flat[:, 2] < 0.15  # (N,)
+
+        # b) Out of bounds: too far from track area
+        #    Use generous bounds based on gate positions
+        bounds_crash = (
+            (torch.abs(drone_pos_flat[:, 0]) > 30.0)
+            | (torch.abs(drone_pos_flat[:, 1]) > 30.0)
+            | (drone_pos_flat[:, 2] > 10.0)
+        )
+
+        # c) Flipped: drone's z-axis pointing downward (upside down beyond recovery)
+        drone_up = quat_axis(drone_rot.squeeze(1), axis=2)  # (N, 3)
+        flipped_crash = drone_up[:, 2] < -0.3  # z-component of up vector < -0.3
+
+        # d) Contact forces: physical collision with gates or ground
+        #    Contact forces are tracked on the drone's base_link (see multirotor.py)
+        collision_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
+        contact_crash = collision_forces.squeeze(1).norm(dim=-1) > 1.0  # (N,)
+
+        crashed = ground_crash | bounds_crash | flipped_crash | contact_crash
 
         # ----- END STUDENT CODE -----
         truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
