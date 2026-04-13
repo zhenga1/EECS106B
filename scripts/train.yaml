@@ -4,7 +4,7 @@ hydra:
     # see https://hydra.cc/docs/advanced/search_path/
     # path is relative to CWD (run from repo root: EECS106B/)
 
-    # SAC
+    # fixed cfg path, actually all cfg files should be in this directory
     - file://cfg
 
     #old path for the PPO
@@ -40,6 +40,6 @@ wandb:
   tags:
 
 defaults:
-  - task: Hover
-  - algo: ppo
+  - task: DroneRace
+  - algo: sac
   - _self_
