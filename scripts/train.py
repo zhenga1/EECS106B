@@ -18,6 +18,7 @@ from tqdm import tqdm
 from omegaconf import OmegaConf
 
 from omni_drones import init_simulation_app
+from omni_drones.utils.torchrl import AgentSpec
 from torchrl.data import CompositeSpec
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from omni_drones.utils.torchrl import SyncDataCollector
@@ -45,7 +46,7 @@ from torchrl.envs.transforms import TransformedEnv, InitTracker, Compose
 #         torch.cuda.manual_seed(seed)
 #         torch.cuda.manual_seed_all(seed)
 
-@hydra.main(version_base=None, config_path="../cfg", config_name="train")
+@hydra.main(version_base=None, config_path=".", config_name="train")
 def main(cfg):
     OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.resolve(cfg)
@@ -157,15 +158,32 @@ def main(cfg):
     env.set_seed(cfg.seed)
 
     try:
-        policy = ALGOS[cfg.algo.name.lower()](
+        algo_cls = ALGOS[cfg.algo.name.lower()]
+    except KeyError:
+        raise NotImplementedError(f"Unknown algorithm: {cfg.algo.name}")
+
+    # SAC and TD3 use the old AgentSpec API; PPO variants use the new
+    # (observation_spec, action_spec, reward_spec) API.
+    OLD_API_ALGOS = {"sac", "td3", "tdmpc"}
+    if cfg.algo.name.lower() in OLD_API_ALGOS:
+        agent_spec = AgentSpec(
+            name="drone",
+            n=1,
+        )
+        agent_spec._env = env
+        policy = algo_cls(
+            cfg.algo,
+            agent_spec=agent_spec,
+            device=base_env.device,
+        )
+    else:
+        policy = algo_cls(
             cfg.algo,
             env.observation_spec,
             env.action_spec,
             env.reward_spec,
-            device=base_env.device
+            device=base_env.device,
         )
-    except KeyError:
-        raise NotImplementedError(f"Unknown algorithm: {cfg.algo.name}")
 
     frames_per_batch = env.num_envs * int(cfg.algo.train_every)
     total_frames = cfg.get("total_frames", -1) // frames_per_batch * frames_per_batch
