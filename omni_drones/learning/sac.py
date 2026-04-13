@@ -44,6 +44,38 @@ from omni_drones.utils.torchrl import AgentSpec
 from tensordict import TensorDict
 from .common import soft_update
 
+from hydra.core.config_store import ConfigStore
+from dataclasses import dataclass, field
+
+@dataclass
+class SACConfig:
+    name: str = "sac"
+    buffer_size: int = 1_000_000
+    train_every: int = 64
+    batch_size: int = 4096
+    gamma: float = 0.95
+    tau: float = 0.005
+    max_grad_norm: float = 5.0
+    share_actor: bool = True
+    gradient_steps: int = 2048
+    actor: dict = field(default_factory=lambda: {
+        "hidden_units": [256, 128, 128],
+        "lr": 5e-4,
+        "layer_norm": True,
+    })
+    critic: dict = field(default_factory=lambda: {
+        "hidden_units": [256, 128, 128],
+        "lr": 5e-4,
+        "layer_norm": True,
+    })
+    critic_loss: str = "smooth_l1"
+    alpha_lr: float = 1e-4
+    actor_delay: int = 2
+    target_update_interval: int = 4
+
+cs = ConfigStore.instance()
+cs.store("sac", node=SACConfig, group="algo")
+
 class SACPolicy(object):
 
     def __init__(self,

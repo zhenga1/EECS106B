@@ -2,7 +2,13 @@
 hydra:
   searchpath:
     # see https://hydra.cc/docs/advanced/search_path/
-    - file://../cfg
+    # path is relative to CWD (run from repo root: EECS106B/)
+
+    # SAC
+    - file://cfg
+
+    #old path for the PPO
+    # - file://../cfg
   run:
     dir: ~/.hydra_outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
