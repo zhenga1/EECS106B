@@ -101,20 +101,31 @@ class DroneRaceEnv(IsaacEnv):
         # -----------------------------------------------------------------------
         # ----- ADD YOUR REWARD CONFIG LINES BELOW (replace / extend the example) -----
 
-        # Progress reward: bonus for reducing distance to next gate
-        self.reward_progress_scale = cfg.task.get("reward_progress_scale", 1.0)
-        # Gate passage: one-time bonus for flying through a gate
-        self.reward_gate_passage = cfg.task.get("reward_gate_passage", 10.0)
-        # Crash penalty: applied on termination due to crash
-        self.reward_crash_scale = cfg.task.get("reward_crash_scale", 10.0)
-        # Time penalty: small cost per step to encourage speed
-        self.reward_time_penalty = cfg.task.get("reward_time_penalty", 0.01)
-        # Action smoothness: penalise large action changes between steps
-        self.reward_smoothness_scale = cfg.task.get("reward_smoothness_scale", 0.001)
-        # Velocity alignment: reward velocity pointing toward the gate
-        self.reward_alignment_scale = cfg.task.get("reward_alignment_scale", 0.3)
-        # Lap completion bonus
-        self.reward_completion_bonus = cfg.task.get("reward_completion_bonus", 50.0)
+        # ── MPCC-style reward hyperparameters ──────────────────────────────
+        # Derived from MPCC (Romero et al., TRO 2022), MPCC++ (Krinner et al.
+        # 2024), Swift (Nature 2023), MonoRace (2026), Actor-Critic MPC
+        # (Romero et al., TRO 2025), and MPPI reference-free cost (2024).
+        #
+        # Core idea: decompose the drone's tracking error into *lag* (along
+        # the gate-to-gate racing line) and *contouring* (perpendicular to it).
+        # Reward = maximise forward progress (Δlag) − penalise contouring².
+        # This is the RL-reward analogue of MPCC's cost:
+        #   J_MPCC = q_c·e_c² + q_l·e_l² − μ_v·Δθ
+        #
+        # Additional terms from Swift (gate bonus, smoothness, crash) and
+        # MPPI (speed bonus, gate-centering reward at crossing time).
+        self.w_progress   = cfg.task.get("w_progress", 2.0)       # μ_v: reward per metre of Δlag (forward progress along racing line)
+        self.w_contouring = cfg.task.get("w_contouring", 0.4)     # q_c: penalty on contouring error² (perpendicular deviation)
+        self.w_lag        = cfg.task.get("w_lag", 0.05)           # q_l: penalty on normalised lag error² (optional, keeps drone pacing)
+        self.w_gate       = cfg.task.get("w_gate", 10.0)         # one-time bonus for passing through a gate
+        self.w_centering  = cfg.task.get("w_centering", 3.0)     # bonus scaled by how centred the gate crossing is (TOGT insight)
+        self.w_speed      = cfg.task.get("w_speed", 0.04)        # reward for speed magnitude (MonoRace / MPPI encouragement)
+        self.w_time       = cfg.task.get("w_time", 0.01)         # per-step cost to encourage speed (Swift)
+        self.w_crash      = cfg.task.get("w_crash", 10.0)        # crash penalty
+        self.w_smooth     = cfg.task.get("w_smooth", 0.001)      # action-rate penalty (Swift r_cmd)
+        self.w_completion = cfg.task.get("w_completion", 50.0)    # full-lap bonus
+        # Legacy aliases so the crash section and other code still works
+        self.reward_crash_scale = self.w_crash
 
         # ----- END STUDENT CODE -----
 
@@ -176,11 +187,13 @@ class DroneRaceEnv(IsaacEnv):
         self.gate_passed = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.track_completed = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.prev_distance_to_gate = torch.zeros(self.num_envs, device=self.device)
+        # MPCC state: previous lag (progress along racing line) for Δlag computation
+        self.prev_lag = torch.zeros(self.num_envs, device=self.device)
         # Gate crossing detection: drone position in gate frame from previous step
         self.gate_width = cfg.task.get("gate_width", 1.0)
         self.prev_drone_in_gate_frame = torch.zeros(self.num_envs, 3, device=self.device)
         self.last_action = torch.zeros(self.num_envs, 1, self.drone.action_spec.shape[-1], device=self.device)
-        self.effort = torch.zeros(self.num_envs, 1, self.drone.action_spec.shape[-1], device=self.device) 
+        self.effort = torch.zeros(self.num_envs, 1, self.drone.action_spec.shape[-1], device=self.device)
 
         # Use a single view with wildcard pattern to access all gates
         try:
@@ -448,6 +461,7 @@ class DroneRaceEnv(IsaacEnv):
         self.track_completed[env_ids] = False
         self.last_action[env_ids] = 0.0
         self.effort[env_ids] = 0.0 # Adding this line changes the result
+        self.prev_lag[env_ids] = 0.0  # MPCC: reset progress along racing line
 
         # Reset gate velocities to prevent drift (gates are static, so we just zero velocities)
         # Set velocities to zero for all gates in reset environments
@@ -899,53 +913,137 @@ class DroneRaceEnv(IsaacEnv):
         # configured in cfg/task/DroneRace.yaml.
         # -----------------------------------------------------------------------
         # ----- ADD YOUR REWARD CODE BELOW (replace the placeholder) -----
+        #
+        # ══════════════════════════════════════════════════════════════════
+        # MPCC-STYLE CONTOURING REWARD
+        # ══════════════════════════════════════════════════════════════════
+        # Converts MPCC's cost  J = q_c·e_c² + q_l·e_l² − μ_v·Δθ  into
+        # an RL reward by flipping the sign:
+        #   R = w_progress·Δlag − w_contouring·e_c² − w_lag·e_l²
+        #       + gate bonus + speed bonus + centering bonus
+        #       − time penalty − smoothness penalty
+        #
+        # The "racing line" between consecutive gates is the straight
+        # segment from prev_gate_center → current_gate_center.  The drone's
+        # position is decomposed into:
+        #   • lag   = projection onto the path tangent  (forward progress)
+        #   • e_c   = perpendicular distance from path  (contouring error)
+        #
+        # References:
+        #   MPCC  — Romero et al., TRO 2022 (lag/contouring decomposition)
+        #   MPCC++ — Krinner et al., 2024 (safety corridors, TuRBO tuning)
+        #   Swift  — Kaufmann et al., Nature 2023 (r_prog + r_cmd + r_crash)
+        #   MonoRace — MavLab 2026 (speed incentive, tiny-net direct control)
+        #   MPPI   — 2024 (reference-free gate progress, Gaussian near-gate weighting)
+        #   AC-MPC — Romero et al., TRO 2025 (state-dependent cost adaptation)
+        #   TOGT   — 2023 (gate as spatial volume, centering matters)
+        # ══════════════════════════════════════════════════════════════════
 
-        # 1. Progress reward: reward for getting closer to the current gate
-        #    After a gate pass, new_gate_center has already been updated, so use
-        #    prev_distance vs current distance to the *new* target gate.
-        new_distance = torch.norm(drone_pos_flat - new_gate_center, dim=-1)  # (N,)
-        progress_reward = (self.prev_distance_to_gate - new_distance) * self.reward_progress_scale
-        # Clamp to avoid huge spikes when gate index changes (distance jumps)
-        progress_reward = torch.where(
-            gate_index_changed, torch.zeros_like(progress_reward), progress_reward
+        # ── 0. Compute previous gate centre (defines the racing line) ────
+        # After _detect_gate_crossings, self.gate_indices has ALREADY been
+        # advanced for drones that just passed a gate.  The "previous" gate
+        # is therefore gate_indices − 1 (clamped to 0 for the first gate,
+        # where the drone starts behind gate 0 so the line points forward).
+        prev_gate_idx = torch.clamp(self.gate_indices - 1, min=0)  # (N,)
+        prev_gate_pos_raw = gate_env_pos[batch_indices, prev_gate_idx]   # (N, 3)
+        prev_gate_rot_raw = gate_env_rot[batch_indices, prev_gate_idx]   # (N, 4)
+        prev_gate_center  = self._get_gate_center(prev_gate_pos_raw,
+                                                   prev_gate_rot_raw)    # (N, 3)
+
+        # ── 1. MPCC decomposition: lag & contouring along racing line ────
+        # Path tangent: unit vector from prev gate centre → current gate centre
+        path_vec = new_gate_center - prev_gate_center                     # (N, 3)
+        path_len = torch.norm(path_vec, dim=-1, keepdim=True).clamp(min=1e-6)  # (N, 1)
+        path_tangent = path_vec / path_len                                # (N, 3)
+
+        # Error vector: drone position relative to previous gate centre
+        error_vec = drone_pos_flat - prev_gate_center                     # (N, 3)
+
+        # Lag = scalar projection onto tangent (how far along the segment)
+        lag = torch.sum(error_vec * path_tangent, dim=-1)                 # (N,)
+
+        # Contouring vector = error − lag·tangent (perpendicular component)
+        contouring_vec = error_vec - lag.unsqueeze(-1) * path_tangent     # (N, 3)
+        contouring_err = torch.norm(contouring_vec, dim=-1)               # (N,)
+
+        # Δlag = forward progress since last step  (MPCC's −μ_v·Δθ → reward)
+        delta_lag = lag - self.prev_lag                                    # (N,)
+        # Zero out Δlag on the step a gate index changes to avoid artefacts
+        delta_lag = torch.where(gate_index_changed,
+                                torch.zeros_like(delta_lag), delta_lag)
+
+        # Normalised lag error (fraction of segment length; 0 = at prev gate,
+        # 1 = at next gate).  Penalise being far from the "expected" position
+        # only lightly — this is MPCC's q_l term, generally small.
+        lag_frac = lag / path_len.squeeze(-1)                             # (N,)
+        lag_err  = torch.clamp(lag_frac, 0.0, 1.5)                       # soft clamp
+
+        # ── 2. Reward terms ──────────────────────────────────────────────
+        # 2a. Progress reward  (MPCC's μ_v·Δθ)
+        progress_reward = delta_lag * self.w_progress                     # (N,)
+
+        # 2b. Contouring penalty  (MPCC's q_c·e_c²)
+        contouring_penalty = -contouring_err.pow(2) * self.w_contouring   # (N,)
+
+        # 2c. Lag penalty  (MPCC's q_l·e_l²) — small, optional stabiliser
+        lag_penalty = -lag_err.pow(2) * self.w_lag                        # (N,)
+
+        # 2d. Gate passage bonus  (Swift / MonoRace)
+        gate_bonus = gate_passed_this_step.float() * self.w_gate          # (N,)
+
+        # 2e. Gate centering bonus  (TOGT insight: reward crossing near centre)
+        #     At the moment of gate passage, measure how centred the drone was
+        #     in the gate's y-z plane using prev_drone_in_gate_frame.
+        #     Max bonus when perfectly centred, decays to 0 at gate edge.
+        gate_yz_dist = torch.norm(
+            self.prev_drone_in_gate_frame[..., 1:3], dim=-1              # (N,)
         )
+        gate_half_diag = 0.5 * (self.gate_width**2 + self.gate_height**2)**0.5
+        centering_score = torch.clamp(1.0 - gate_yz_dist / gate_half_diag,
+                                       min=0.0)                           # (N,) ∈ [0, 1]
+        centering_bonus = (gate_passed_this_step.float()
+                           * centering_score * self.w_centering)          # (N,)
 
-        # 2. Velocity alignment: reward velocity component pointing toward gate
-        drone_vel_world = self.drone.vel[..., :3].squeeze(1)  # (N, 3) linear vel in body frame
-        drone_rot_flat = drone_rot.squeeze(1)  # (N, 4)
-        drone_vel_env = quat_rotate(drone_rot_flat, drone_vel_world)  # rotate to env frame
-        dir_to_gate = new_gate_center - drone_pos_flat
-        dir_to_gate_norm = dir_to_gate / (torch.norm(dir_to_gate, dim=-1, keepdim=True) + 1e-8)
-        vel_toward_gate = torch.sum(drone_vel_env * dir_to_gate_norm, dim=-1)  # (N,)
-        alignment_reward = torch.clamp(vel_toward_gate, min=0.0) * self.reward_alignment_scale
+        # 2f. Speed bonus  (MonoRace / MPPI: encourage fast flight)
+        drone_vel_body = self.drone.vel[..., :3].squeeze(1)               # (N, 3)
+        drone_rot_flat = drone_rot.squeeze(1)                             # (N, 4)
+        drone_vel_env  = quat_rotate(drone_rot_flat, drone_vel_body)      # (N, 3)
+        speed = torch.norm(drone_vel_env, dim=-1)                         # (N,)
+        speed_bonus = speed * self.w_speed                                # (N,)
 
-        # 3. Gate passage bonus
-        gate_bonus = gate_passed_this_step.float() * self.reward_gate_passage  # (N,)
+        # 2g. Time penalty  (Swift: small per-step cost)
+        time_penalty = -self.w_time                                       # scalar
 
-        # 4. Time penalty (encourage speed)
-        time_penalty = -self.reward_time_penalty  # scalar, broadcast
-
-        # 5. Action smoothness
-        current_action = self.drone.get_joint_velocities()  # proxy for motor commands
+        # 2h. Action smoothness penalty  (Swift r_cmd)
+        current_action = self.drone.get_joint_velocities()
         action_diff = torch.norm(
             (current_action - self.last_action).squeeze(1), dim=-1
-        )  # (N,)
-        smooth_penalty = -action_diff * self.reward_smoothness_scale
+        )                                                                 # (N,)
+        smooth_penalty = -action_diff * self.w_smooth                     # (N,)
 
-        # 6. Lap completion bonus
-        completion_bonus = self.track_completed.float() * self.reward_completion_bonus
+        # 2i. Lap completion bonus
+        completion_bonus = self.track_completed.float() * self.w_completion  # (N,)
 
+        # ── 3. Total reward ──────────────────────────────────────────────
         reward = (
-            progress_reward
-            + alignment_reward
-            + gate_bonus
-            + time_penalty
-            + smooth_penalty
-            + completion_bonus
+            progress_reward       # MPCC μ_v·Δθ  — primary driver
+            + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
+            + lag_penalty         # MPCC q_l·e_l² — pacing (small)
+            + gate_bonus          # Swift          — discrete gate reward
+            + centering_bonus     # TOGT           — cross through centre
+            + speed_bonus         # MonoRace/MPPI  — go fast
+            + time_penalty        # Swift          — urgency
+            + smooth_penalty      # Swift r_cmd    — don't oscillate
+            + completion_bonus    # lap done       — big payoff
         )  # (N,)
 
-        # Update state for next step
-        self.prev_distance_to_gate = new_distance.detach()
+        # ── 4. Update state for next step ────────────────────────────────
+        # On gate-index change, reset lag to 0 (start of new segment)
+        self.prev_lag = torch.where(gate_index_changed,
+                                     torch.zeros_like(lag), lag).detach()
+        self.prev_distance_to_gate = torch.norm(
+            drone_pos_flat - new_gate_center, dim=-1
+        ).detach()
         self.last_action = current_action.detach()
 
         # ----- END STUDENT CODE -----

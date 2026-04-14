@@ -130,23 +130,25 @@ gate_scale: 1.0
 gate_height: 2.5 
 gate_width: 2.5 
 
-# ---- STUDENT EDIT: reward hyperparameters --------------------------------
-# Add one line per reward scale you define in drone_race.py __init__.
-# They are read via cfg.task.get("key", default). Rename / extend as needed.
+# ── MPCC-style reward hyperparameters ──────────────────────────────────────
+# Converts MPCC's cost J = q_c·e_c² + q_l·e_l² − μ_v·Δθ into an RL reward.
+# Racing line = straight segment from prev gate centre → current gate centre.
+# Drone position is decomposed into lag (along segment) and contouring (⊥).
 #
-# reward_example: 0.5          # <-- EDIT or replace with your own reward scales
-# reward_progress_scale: 1.0
-# reward_gate_passage: 10.0
-# reward_crash_scale: 5.0
+# Sources: MPCC (TRO 2022), MPCC++ (2024), Swift (Nature 2023), MonoRace
+# (2026), MPPI ref-free (2024), Actor-Critic MPC (TRO 2025), TOGT (2023).
 
-reward_progress_scale: 1.0     # reward per metre closer to the gate
-reward_gate_passage: 10.0      # one-time bonus for passing through a gate
-reward_crash_scale: 10.0       # penalty applied on crash termination
-reward_time_penalty: 0.01      # small per-step cost to encourage speed
-reward_smoothness_scale: 0.001 # penalty on action rate-of-change
-reward_alignment_scale: 0.3    # reward for velocity pointing toward gate
-reward_completion_bonus: 50.0  # large bonus for completing the full lap
-# --------------------------------------------------------------------------
+w_progress:   2.0    # μ_v — reward per metre of forward progress (Δlag) along racing line
+w_contouring: 0.4    # q_c — penalty weight on contouring error² (lateral deviation from line)
+w_lag:        0.05   # q_l — penalty weight on normalised lag error² (pacing, generally small)
+w_gate:       10.0   # one-time bonus for passing through a gate (Swift)
+w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT: gate as spatial volume)
+w_speed:      0.04   # reward for speed magnitude (MonoRace / MPPI)
+w_time:       0.01   # per-step cost to encourage speed (Swift)
+w_crash:      10.0   # penalty applied on crash termination
+w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
+w_completion: 50.0   # large bonus for completing the full lap
+# ──────────────────────────────────────────────────────────────────────────
 
 debug_gate_origins: false
 debug_axis_length: 0.5
