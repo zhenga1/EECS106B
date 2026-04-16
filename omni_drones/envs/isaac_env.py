@@ -38,8 +38,10 @@ import isaacsim.core.utils.extensions as _ext_mod
 from isaacsim.core.utils.viewports import set_camera_view
 from isaacsim.util.debug_draw import _debug_draw
 
+
 def enable_extension(name):
     return _ext_mod.enable_extension(name)
+
 
 from tensordict.tensordict import TensorDict, TensorDictBase
 from torchrl.data import Composite, TensorSpec, DiscreteTensorSpec
@@ -48,6 +50,7 @@ from torchrl.envs import EnvBase
 from omni_drones.robots.robot import RobotBase
 from omni_drones.utils.torchrl import AgentSpec
 
+
 class DebugDraw:
     def __init__(self):
         self._draw = _debug_draw.acquire_debug_draw_interface()
@@ -55,7 +58,7 @@ class DebugDraw:
     def clear(self):
         self._draw.clear_lines()
 
-    def plot(self, x: torch.Tensor, size=2.0, color=(1., 1., 1., 1.)):
+    def plot(self, x: torch.Tensor, size=2.0, color=(1.0, 1.0, 1.0, 1.0)):
         if not (x.ndim == 2) and (x.shape[1] == 3):
             raise ValueError("x must be a tensor of shape (N, 3).")
         x = x.cpu()
@@ -65,11 +68,17 @@ class DebugDraw:
         colors = [color] * len(point_list_0)
         self._draw.draw_lines(point_list_0, point_list_1, colors, sizes)
 
-    def vector(self, x: torch.Tensor, v: torch.Tensor, size=2.0, color=(0., 1., 1., 1.)):
+    def vector(
+        self, x: torch.Tensor, v: torch.Tensor, size=2.0, color=(0.0, 1.0, 1.0, 1.0)
+    ):
         x = x.cpu().reshape(-1, 3)
         v = v.cpu().reshape(-1, 3)
         if not (x.shape == v.shape):
-            raise ValueError("x and v must have the same shape, got {} and {}.".format(x.shape, v.shape))
+            raise ValueError(
+                "x and v must have the same shape, got {} and {}.".format(
+                    x.shape, v.shape
+                )
+            )
         point_list_0 = x.tolist()
         point_list_1 = (x + v).tolist()
         sizes = [size] * len(point_list_0)
@@ -102,7 +111,7 @@ class IsaacEnv(EnvBase):
         print("--------------------------------")
         print(f"dt: {self.cfg.sim.dt}")
         print("--------------------------------")
-        
+
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
 
@@ -164,7 +173,7 @@ class IsaacEnv(EnvBase):
         if self.enable_viewport:
             set_camera_view(
                 eye=central_env_pos + np.asarray(self.cfg.viewer.eye),
-                target=central_env_pos + np.asarray(self.cfg.viewer.lookat)
+                target=central_env_pos + np.asarray(self.cfg.viewer.lookat),
             )
 
         RobotBase._envs_positions = self.envs_positions.unsqueeze(1)
@@ -187,15 +196,21 @@ class IsaacEnv(EnvBase):
             self.batch_size,
         )
         self.progress_buf = self._tensordict["progress"]
-        self.done_spec = Composite({
-            "done": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
-            "terminated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
-            "truncated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
-        }).expand(self.num_envs).to(self.device)
+        self.done_spec = (
+            Composite(
+                {
+                    "done": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
+                    "terminated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
+                    "truncated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
+                }
+            )
+            .expand(self.num_envs)
+            .to(self.device)
+        )
         self._set_specs()
         import pprint
-        pprint.pprint(self.fake_tensordict().shapes)
 
+        pprint.pprint(self.fake_tensordict().shapes)
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
@@ -243,22 +258,23 @@ class IsaacEnv(EnvBase):
         if not self._is_closed:
             try:
                 import omni.timeline
+
                 timeline = omni.timeline.get_timeline_interface()
                 if timeline:
                     timeline.stop()
             except Exception as e:
                 logging.warning(f"Failed to stop timeline: {e}")
-            
+
             try:
-                if hasattr(self, 'sim') and self.sim is not None:
+                if hasattr(self, "sim") and self.sim is not None:
                     self.sim.stop()
-                    if hasattr(self.sim, 'clear_all_callbacks'):
+                    if hasattr(self.sim, "clear_all_callbacks"):
                         self.sim.clear_all_callbacks()
-                    if hasattr(self.sim, 'clear'):
+                    if hasattr(self.sim, "clear"):
                         self.sim.clear()
             except Exception as e:
                 logging.warning(f"Failed to stop/clear simulation: {e}")
-            
+
             self._is_closed = True
             logging.info("IsaacEnv closed.")
 
@@ -268,13 +284,15 @@ class IsaacEnv(EnvBase):
         else:
             env_mask = torch.ones(self.num_envs, dtype=bool, device=self.device)
         env_ids = env_mask.nonzero().squeeze(-1)
-        
+
         self._reset_idx(env_ids)
-        
-        self.progress_buf[env_ids] = 0.
+
+        self.progress_buf[env_ids] = 0.0
         tensordict = TensorDict({}, self.batch_size, device=self.device)
         tensordict.update(self._compute_state_and_obs())
-        tensordict.set("truncated", (self.progress_buf > self.max_episode_length).unsqueeze(1))
+        tensordict.set(
+            "truncated", (self.progress_buf > self.max_episode_length).unsqueeze(1)
+        )
         return tensordict
 
     @abc.abstractmethod
@@ -313,6 +331,7 @@ class IsaacEnv(EnvBase):
         if getattr(self.cfg.sim, "enable_replicator", False):
             try:
                 import omni.replicator.core as rep
+
                 rep.set_global_seed(seed)
             except ImportError:
                 pass
@@ -324,7 +343,9 @@ class IsaacEnv(EnvBase):
         carb_settings_iface = carb.settings.get_settings()
         # enable hydra scene-graph instancing
         # note: this allows rendering of instanceable assets on the GUI
-        carb_settings_iface.set_bool("/persistent/omnihydra/useSceneGraphInstancing", True)
+        carb_settings_iface.set_bool(
+            "/persistent/omnihydra/useSceneGraphInstancing", True
+        )
         # change dispatcher to use the default dispatcher in PhysX SDK instead of carb tasking
         # note: dispatcher handles how threads are launched for multi-threaded physics
         carb_settings_iface.set_bool("/physics/physxDispatcher", True)
@@ -365,6 +386,23 @@ class IsaacEnv(EnvBase):
         return self
 
     def get_env_poses(self, world_poses: Tuple[torch.Tensor, torch.Tensor]):
+        """Convert batched world-frame poses into environment-local poses.
+
+        This method subtracts each environment origin from positions while leaving
+        rotations unchanged.
+
+        Args:
+            world_poses: Tuple ``(pos, rot)`` where:
+                - ``pos`` is either ``(N, 3)`` or ``(N, K, 3)``
+                - ``rot`` matches the same leading dimensions as ``pos``
+
+        Returns:
+            Tuple ``(pos_env, rot)`` where:
+                - if ``pos`` is ``(N, 3)``, returns ``pos_env = pos - envs_positions``
+                - if ``pos`` is ``(N, K, 3)``, returns
+                  ``pos_env = pos - envs_positions.unsqueeze(1)``
+                - ``rot`` is returned unchanged.
+        """
         pos, rot = world_poses
         if pos.dim() == 3:
             return pos - self.envs_positions.unsqueeze(1), rot
@@ -372,13 +410,28 @@ class IsaacEnv(EnvBase):
             return pos - self.envs_positions, rot
 
     def get_world_poses(self, env_poses: Tuple[torch.Tensor, torch.Tensor]):
+        """Convert environment-local poses into world-frame poses, by adding each environment
+        origin to positions while leaving rotations unchanged.
+
+        Args:
+            env_poses: Tuple ``(pos, rot)`` where:
+                - ``pos`` is either ``(N, 3)`` or ``(N, K, 3)``
+                - ``rot`` matches the same leading dimensions as ``pos``
+
+        Returns:
+            Tuple (pos_world, rot) where:
+                - if ``pos`` is ``(N, 3)``, returns ``pos_world = pos + envs_positions``
+                - if ``pos`` is ``(N, K, 3)``, returns
+                  ``pos_world = pos + envs_positions.unsqueeze(1)``
+                - ``rot`` is returned unchanged.
+        """
         pos, rot = env_poses
         if pos.dim() == 3:
             return pos + self.envs_positions.unsqueeze(1), rot
         else:
             return pos + self.envs_positions, rot
 
-    def enable_render(self, enable: Union[bool, Callable]=True):
+    def enable_render(self, enable: Union[bool, Callable] = True):
         if isinstance(enable, bool):
             self._should_render = lambda substep: enable
         elif callable(enable):
@@ -386,7 +439,7 @@ class IsaacEnv(EnvBase):
         else:
             raise TypeError("enable_render must be a bool or callable.")
 
-    def render(self, mode: str="human"):
+    def render(self, mode: str = "human"):
         if mode == "human":
             return None
         elif mode == "rgb_array":
@@ -397,7 +450,11 @@ class IsaacEnv(EnvBase):
                     "arguments to the environment class at initialization."
                 )
             # require replicator to be enabled to fetch rgb arrays
-            if not getattr(self.cfg.sim, "enable_replicator", False) or not hasattr(self, "_rgb_annotator") or self._rgb_annotator is None:
+            if (
+                not getattr(self.cfg.sim, "enable_replicator", False)
+                or not hasattr(self, "_rgb_annotator")
+                or self._rgb_annotator is None
+            ):
                 raise RuntimeError(
                     "RGB rendering requires Replicator. Set cfg.sim.enable_replicator=True to enable it."
                 )
@@ -431,12 +488,15 @@ class IsaacEnv(EnvBase):
         if self.enable_viewport:
             if getattr(self.cfg.sim, "enable_replicator", False):
                 import omni.replicator.core as rep
+
                 # create render product
                 self._render_product = rep.create.render_product(
                     "/OmniverseKit_Persp", tuple(self.cfg.viewer.resolution)
                 )
                 # create rgb annotator -- used to read data from the render product
-                self._rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb", device="cpu")
+                self._rgb_annotator = rep.AnnotatorRegistry.get_annotator(
+                    "rgb", device="cpu"
+                )
                 self._rgb_annotator.attach([self._render_product])
             else:
                 # leave render product uninitialized to avoid loading synthetic-data stack

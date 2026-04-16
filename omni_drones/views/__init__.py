@@ -85,14 +85,18 @@ class ArticulationView(_ArticulationView):
         )
 
     @require_sim_initialized
-    def initialize(self, physics_sim_view: omni.physics.tensors.SimulationView = None) -> None:
+    def initialize(
+        self, physics_sim_view: omni.physics.tensors.SimulationView = None
+    ) -> None:
         """Create a physics simulation view if not passed and creates an articulation view using physX tensor api.
 
         Args:
             physics_sim_view (omni.physics.tensors.SimulationView, optional): current physics simulation view. Defaults to None.
         """
         if physics_sim_view is None:
-            physics_sim_view = omni.physics.tensors.create_simulation_view(self._backend)
+            physics_sim_view = omni.physics.tensors.create_simulation_view(
+                self._backend
+            )
             physics_sim_view.set_subspace_roots("/")
         carb.log_info("initializing view for {}".format(self._name))
         # TODO: add a callback to set physics view to None once stop is called
@@ -108,7 +112,9 @@ class ArticulationView(_ArticulationView):
             self._num_shapes = self._physics_view.max_shapes
             self._num_fixed_tendons = self._physics_view.max_fixed_tendons
             self._body_names = self._metadata.link_names
-            self._body_indices = dict(zip(self._body_names, range(len(self._body_names))))
+            self._body_indices = dict(
+                zip(self._body_names, range(len(self._body_names)))
+            )
             self._dof_names = self._metadata.dof_names
             self._dof_indices = self._metadata.dof_indices
             self._dof_types = self._metadata.dof_types
@@ -121,14 +127,24 @@ class ArticulationView(_ArticulationView):
             # TODO: implement effort part
             if self.num_dof > 0:
                 if self._default_joints_state is None:
-                    self._default_joints_state = JointsState(positions=None, velocities=None, efforts=None)
+                    self._default_joints_state = JointsState(
+                        positions=None, velocities=None, efforts=None
+                    )
                 if self._default_joints_state.positions is None:
-                    self._default_joints_state.positions = default_actions.joint_positions
+                    self._default_joints_state.positions = (
+                        default_actions.joint_positions
+                    )
                 if self._default_joints_state.velocities is None:
-                    self._default_joints_state.velocities = default_actions.joint_velocities
+                    self._default_joints_state.velocities = (
+                        default_actions.joint_velocities
+                    )
                 if self._default_joints_state.efforts is None:
-                    self._default_joints_state.efforts = self._backend_utils.create_zeros_tensor(
-                        shape=[self.count, self.num_dof], dtype="float32", device=self._device
+                    self._default_joints_state.efforts = (
+                        self._backend_utils.create_zeros_tensor(
+                            shape=[self.count, self.num_dof],
+                            dtype="float32",
+                            device=self._device,
+                        )
                     )
         return
 
@@ -159,41 +175,64 @@ class ArticulationView(_ArticulationView):
         if not self._is_initialized:
             carb.log_warn("ArticulationView needs to be initialized.")
             return None
-        if not omni.timeline.get_timeline_interface().is_stopped() and self._physics_view is not None:
-            indices = self._backend_utils.resolve_indices(indices, self.count, device="cpu")
-            joint_indices = self._backend_utils.resolve_indices(joint_indices, self.num_dof, device="cpu")
+        if (
+            not omni.timeline.get_timeline_interface().is_stopped()
+            and self._physics_view is not None
+        ):
+            indices = self._backend_utils.resolve_indices(
+                indices, self.count, device="cpu"
+            )
+            joint_indices = self._backend_utils.resolve_indices(
+                joint_indices, self.num_dof, device="cpu"
+            )
             if joint_indices.numel() == 0:
                 return None, None
             kps = self._physics_view.get_dof_stiffnesses()
             kds = self._physics_view.get_dof_dampings()
             result_kps = self._backend_utils.move_data(
-                kps[self._backend_utils.expand_dims(indices, 1), joint_indices], device=self._device
+                kps[self._backend_utils.expand_dims(indices, 1), joint_indices],
+                device=self._device,
             )
             result_kds = self._backend_utils.move_data(
-                kds[self._backend_utils.expand_dims(indices, 1), joint_indices], device=self._device
+                kds[self._backend_utils.expand_dims(indices, 1), joint_indices],
+                device=self._device,
             )
             if clone:
-                result_kps = self._backend_utils.clone_tensor(result_kps, device=self._device)
-                result_kds = self._backend_utils.clone_tensor(result_kds, device=self._device)
+                result_kps = self._backend_utils.clone_tensor(
+                    result_kps, device=self._device
+                )
+                result_kds = self._backend_utils.clone_tensor(
+                    result_kds, device=self._device
+                )
             return result_kps, result_kds
         else:
-            indices = self._backend_utils.resolve_indices(indices, self.count, self._device)
+            indices = self._backend_utils.resolve_indices(
+                indices, self.count, self._device
+            )
             dof_types = self.get_dof_types()
-            joint_indices = self._backend_utils.resolve_indices(joint_indices, self.num_dof, self._device)
+            joint_indices = self._backend_utils.resolve_indices(
+                joint_indices, self.num_dof, self._device
+            )
             if joint_indices.numel() == 0:
                 return None, None
             kps = self._backend_utils.create_zeros_tensor(
-                shape=[indices.shape[0], joint_indices.shape[0]], dtype="float32", device=self._device
+                shape=[indices.shape[0], joint_indices.shape[0]],
+                dtype="float32",
+                device=self._device,
             )
             kds = self._backend_utils.create_zeros_tensor(
-                shape=[indices.shape[0], joint_indices.shape[0]], dtype="float32", device=self._device
+                shape=[indices.shape[0], joint_indices.shape[0]],
+                dtype="float32",
+                device=self._device,
             )
             articulation_write_idx = 0
             for i in indices:
                 dof_write_idx = 0
                 for dof_index in joint_indices:
                     drive_type = (
-                        "angular" if dof_types[dof_index] == omni.physics.tensors.DofType.Rotation else "linear"
+                        "angular"
+                        if dof_types[dof_index] == omni.physics.tensors.DofType.Rotation
+                        else "linear"
                     )
                     prim = get_prim_at_path(self._dof_paths[i][dof_index])
                     if prim.HasAPI(UsdPhysics.DriveAPI):
@@ -201,18 +240,30 @@ class ArticulationView(_ArticulationView):
                     else:
                         drive = UsdPhysics.DriveAPI.Apply(prim, drive_type)
                     if drive.GetStiffnessAttr().Get() == 0.0 or drive_type == "linear":
-                        kps[articulation_write_idx][dof_write_idx] = drive.GetStiffnessAttr().Get()
+                        kps[articulation_write_idx][
+                            dof_write_idx
+                        ] = drive.GetStiffnessAttr().Get()
                     else:
-                        kps[articulation_write_idx][dof_write_idx] = self._backend_utils.convert(
-                            1.0 / np.deg2rad(float(1.0 / drive.GetStiffnessAttr().Get())),
-                            device=self._device,
+                        kps[articulation_write_idx][dof_write_idx] = (
+                            self._backend_utils.convert(
+                                1.0
+                                / np.deg2rad(
+                                    float(1.0 / drive.GetStiffnessAttr().Get())
+                                ),
+                                device=self._device,
+                            )
                         )
                     if drive.GetDampingAttr().Get() == 0.0 or drive_type == "linear":
-                        kds[articulation_write_idx][dof_write_idx] = drive.GetDampingAttr().Get()
+                        kds[articulation_write_idx][
+                            dof_write_idx
+                        ] = drive.GetDampingAttr().Get()
                     else:
-                        kds[articulation_write_idx][dof_write_idx] = self._backend_utils.convert(
-                            1.0 / np.deg2rad(float(1.0 / drive.GetDampingAttr().Get())),
-                            device=self._device,
+                        kds[articulation_write_idx][dof_write_idx] = (
+                            self._backend_utils.convert(
+                                1.0
+                                / np.deg2rad(float(1.0 / drive.GetDampingAttr().Get())),
+                                device=self._device,
+                            )
                         )
                     dof_write_idx += 1
                 articulation_write_idx += 1
@@ -230,16 +281,23 @@ class ArticulationView(_ArticulationView):
         if not self._is_initialized:
             carb.log_warn("ArticulationView needs to be initialized.")
             return None
-        if not omni.timeline.get_timeline_interface().is_stopped() and self._physics_view is not None:
+        if (
+            not omni.timeline.get_timeline_interface().is_stopped()
+            and self._physics_view is not None
+        ):
             if self.num_dof == 0:
                 return None
             with disable_warnings(getattr(self, "_physics_sim_view", None)):
                 joint_positions = self._physics_view.get_dof_position_targets()
                 if clone:
-                    joint_positions = self._backend_utils.clone_tensor(joint_positions, device=self._device)
+                    joint_positions = self._backend_utils.clone_tensor(
+                        joint_positions, device=self._device
+                    )
                 joint_velocities = self._physics_view.get_dof_velocity_targets()
                 if clone:
-                    joint_velocities = self._backend_utils.clone_tensor(joint_velocities, device=self._device)
+                    joint_velocities = self._backend_utils.clone_tensor(
+                        joint_velocities, device=self._device
+                    )
             # TODO: implement the effort part
             return ArticulationActions(
                 joint_positions=joint_positions,
@@ -248,12 +306,30 @@ class ArticulationView(_ArticulationView):
                 joint_indices=None,
             )
         else:
-            carb.log_warn("Physics Simulation View is not created yet in order to use get_applied_actions")
+            carb.log_warn(
+                "Physics Simulation View is not created yet in order to use get_applied_actions"
+            )
             return None
 
     def get_world_poses(
-        self, env_indices: Optional[torch.Tensor] = None, clone: bool = True, usd: bool = False
+        self,
+        env_indices: Optional[torch.Tensor] = None,
+        clone: bool = True,
+        usd: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return world positions and orientations for each articulation in the view.
+
+        Args:
+            env_indices: Optional indices of environments to query. Defaults to all.
+            clone: If True, return cloned tensors. Default is True.
+            usd: If True, use USD data. Default is False.
+
+        Returns:
+            Tuple (positions, orientations):
+                positions: Tensor of shape (..., 3)
+                orientations: Tensor of shape (..., 4) (quaternion, wxyz)
+        """
         indices = self._resolve_env_indices(env_indices)
         if self._physics_view is not None and not usd:
             with disable_warnings(getattr(self, "_physics_sim_view", None)):
@@ -272,6 +348,14 @@ class ArticulationView(_ArticulationView):
         orientations: Optional[torch.Tensor] = None,
         env_indices: Optional[torch.Tensor] = None,
     ) -> None:
+        """
+        Set world positions and orientations for articulations in the view.
+
+        Args:
+            positions: Tensor of positions (..., 3), optional.
+            orientations: Tensor of quaternions (..., 4), optional.
+            env_indices: Optional indices of environments to set. Defaults to all.
+        """
         with disable_warnings(getattr(self, "_physics_sim_view", None)):
             indices = self._resolve_env_indices(env_indices)
             poses = self._physics_view.get_root_transforms()
@@ -284,18 +368,48 @@ class ArticulationView(_ArticulationView):
     def get_velocities(
         self, env_indices: Optional[torch.Tensor] = None, clone: bool = True
     ) -> torch.Tensor:
+        """
+        Return linear and angular velocities for each articulation in the view.
+
+        Args:
+            env_indices: Optional indices of environments to query. Defaults to all.
+            clone: If True, return cloned tensors. Default is True.
+
+        Returns:
+            Tensor of velocities (..., 6) for each articulation.
+        """
         indices = self._resolve_env_indices(env_indices)
         return super().get_velocities(indices, clone).unflatten(0, self.shape)
 
     def set_velocities(
         self, velocities: torch.Tensor, env_indices: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
+        """
+        Set linear and angular velocities for articulations in the view.
+
+        Args:
+            velocities: Tensor of velocities (..., 6).
+            env_indices: Optional indices of environments to set. Defaults to all.
+
+        Returns:
+            Result of the parent set_velocities call.
+        """
         indices = self._resolve_env_indices(env_indices)
         return super().set_velocities(velocities.reshape(-1, 6), indices)
 
     def get_joint_velocities(
         self, env_indices: Optional[torch.Tensor] = None, clone: bool = True
     ) -> torch.Tensor:
+        """
+        Return joint velocities for each articulation in the view.
+
+        Args:
+            env_indices: Optional indices of environments to query. Defaults to all.
+            clone: If True, return cloned tensors. Default is True.
+
+        Returns:
+            Tensor of joint velocities (..., num_joints).
+        """
         indices = self._resolve_env_indices(env_indices)
         return (
             super().get_joint_velocities(indices, clone=clone).unflatten(0, self.shape)
@@ -307,24 +421,36 @@ class ArticulationView(_ArticulationView):
         env_indices: Optional[torch.Tensor] = None,
         joint_indices: Optional[torch.Tensor] = None,
     ) -> None:
+        """
+        Set joint velocities for articulations in the view.
+
+        Args:
+            velocities: Tensor of joint velocities (..., num_joints).
+            env_indices: Optional indices of environments to set. Defaults to all.
+            joint_indices: Optional indices of joints to set. Defaults to all.
+        """
         indices = self._resolve_env_indices(env_indices)
         super().set_joint_velocities(
-            velocities.flatten(end_dim=-2),
-            indices,
-            joint_indices
+            velocities.flatten(end_dim=-2), indices, joint_indices
         )
 
     def set_joint_velocity_targets(
         self,
         velocities: Optional[torch.Tensor],
         env_indices: Optional[torch.Tensor] = None,
-        joint_indices: Optional[torch.Tensor] = None
+        joint_indices: Optional[torch.Tensor] = None,
     ) -> None:
+        """
+        Set joint velocity targets for articulations in the view.
+
+        Args:
+            velocities: Tensor of joint velocity targets (..., num_joints).
+            env_indices: Optional indices of environments to set. Defaults to all.
+            joint_indices: Optional indices of joints to set. Defaults to all.
+        """
         indices = self._resolve_env_indices(env_indices)
         super().set_joint_velocity_targets(
-            velocities.flatten(end_dim=-2),
-            indices,
-            joint_indices
+            velocities.flatten(end_dim=-2), indices, joint_indices
         )
 
     def get_joint_positions(
@@ -343,9 +469,7 @@ class ArticulationView(_ArticulationView):
     ) -> None:
         indices = self._resolve_env_indices(env_indices)
         super().set_joint_positions(
-            positions.flatten(end_dim=-2),
-            indices,
-            joint_indices
+            positions.flatten(end_dim=-2), indices, joint_indices
         )
 
     def set_joint_position_targets(
@@ -356,30 +480,20 @@ class ArticulationView(_ArticulationView):
     ) -> None:
         indices = self._resolve_env_indices(env_indices)
         super().set_joint_position_targets(
-            positions.flatten(end_dim=-2),
-            indices,
-            joint_indices
+            positions.flatten(end_dim=-2), indices, joint_indices
         )
 
     def set_joint_efforts(
         self,
         efforts: Optional[torch.Tensor],
         env_indices: Optional[torch.Tensor] = None,
-        joint_indices: Optional[torch.Tensor] = None
+        joint_indices: Optional[torch.Tensor] = None,
     ) -> None:
         indices = self._resolve_env_indices(env_indices)
-        super().set_joint_efforts(
-            efforts.flatten(end_dim=-2),
-            indices,
-            joint_indices
-        )
+        super().set_joint_efforts(efforts.flatten(end_dim=-2), indices, joint_indices)
 
     def get_dof_limits(self) -> torch.Tensor:
-        return (
-            super().get_dof_limits()
-            .unflatten(0, self.shape)
-            .to(self._device)
-        )
+        return super().get_dof_limits().unflatten(0, self.shape).to(self._device)
 
     def get_body_masses(
         self, env_indices: Optional[torch.Tensor] = None, clone: bool = True
@@ -395,9 +509,13 @@ class ArticulationView(_ArticulationView):
         indices = self._resolve_env_indices(env_indices)
         return super().set_body_masses(values.reshape(-1, self.num_bodies), indices)
 
-    def get_force_sensor_forces(self, env_indices: Optional[torch.Tensor] = None, clone: bool = False) -> torch.Tensor:
+    def get_force_sensor_forces(
+        self, env_indices: Optional[torch.Tensor] = None, clone: bool = False
+    ) -> torch.Tensor:
         with disable_warnings(getattr(self, "_physics_sim_view", None)):
-            forces = torch.unflatten(self._physics_view.get_force_sensor_forces(), 0, self.shape)
+            forces = torch.unflatten(
+                self._physics_view.get_force_sensor_forces(), 0, self.shape
+            )
         if clone:
             forces = forces.clone()
         if env_indices is not None:
@@ -467,7 +585,10 @@ class RigidPrimView(_RigidPrimView):
         return self
 
     def get_world_poses(
-        self, env_indices: Optional[torch.Tensor] = None, clone: bool = True, usd: bool = False
+        self,
+        env_indices: Optional[torch.Tensor] = None,
+        clone: bool = True,
+        usd: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         indices = self._resolve_env_indices(env_indices)
         pos, rot = super().get_world_poses(indices, clone, usd)
@@ -515,65 +636,87 @@ class RigidPrimView(_RigidPrimView):
         self,
         env_indices: Optional[torch.Tensor] = None,
         clone: bool = True,
-        dt: float = 1
+        dt: float = 1,
     ) -> torch.Tensor:
         indices = self._resolve_env_indices(env_indices)
-        return super().get_contact_force_matrix(indices, clone, dt).unflatten(0, self.shape)
+        return (
+            super()
+            .get_contact_force_matrix(indices, clone, dt)
+            .unflatten(0, self.shape)
+        )
 
     def get_masses(
-        self,
-        env_indices: Optional[torch.Tensor] = None,
-        clone: bool = True
+        self, env_indices: Optional[torch.Tensor] = None, clone: bool = True
     ) -> torch.Tensor:
         indices = self._resolve_env_indices(env_indices)
-        if not omni.timeline.get_timeline_interface().is_stopped() and self._physics_view is not None:
-            current_values = self._backend_utils.move_data(self._physics_view.get_masses(), self._device)
+        if (
+            not omni.timeline.get_timeline_interface().is_stopped()
+            and self._physics_view is not None
+        ):
+            current_values = self._backend_utils.move_data(
+                self._physics_view.get_masses(), self._device
+            )
             masses = current_values[indices]
             if clone:
                 masses = self._backend_utils.clone_tensor(masses, device=self._device)
         else:
-            masses = self._backend_utils.create_zeros_tensor([indices.shape[0]], dtype="float32", device=self._device)
+            masses = self._backend_utils.create_zeros_tensor(
+                [indices.shape[0]], dtype="float32", device=self._device
+            )
             write_idx = 0
             for i in indices:
                 if self._mass_apis[i.tolist()] is None:
                     if self._prims[i.tolist()].HasAPI(UsdPhysics.MassAPI):
-                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI(self._prims[i.tolist()])
+                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI(
+                            self._prims[i.tolist()]
+                        )
                     else:
-                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI.Apply(self._prims[i.tolist()])
+                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI.Apply(
+                            self._prims[i.tolist()]
+                        )
                 masses[write_idx] = self._backend_utils.create_tensor_from_list(
-                    self._mass_apis[i.tolist()].GetMassAttr().Get(), dtype="float32", device=self._device
+                    self._mass_apis[i.tolist()].GetMassAttr().Get(),
+                    dtype="float32",
+                    device=self._device,
                 )
                 write_idx += 1
         return masses.reshape(-1, *self.shape[1:], 1)
 
     def set_masses(
-        self,
-        masses: torch.Tensor,
-        env_indices: Optional[torch.Tensor] = None
+        self, masses: torch.Tensor, env_indices: Optional[torch.Tensor] = None
     ) -> None:
         indices = self._resolve_env_indices(env_indices).cpu()
         masses = masses.reshape(-1, 1)
-        if not omni.timeline.get_timeline_interface().is_stopped() and self._physics_view is not None:
-            data = self._backend_utils.clone_tensor(self._physics_view.get_masses(), device="cpu")
+        if (
+            not omni.timeline.get_timeline_interface().is_stopped()
+            and self._physics_view is not None
+        ):
+            data = self._backend_utils.clone_tensor(
+                self._physics_view.get_masses(), device="cpu"
+            )
             data[indices] = self._backend_utils.move_data(masses, device="cpu")
             self._physics_view.set_masses(data, indices)
         else:
-            indices = self._backend_utils.resolve_indices(indices, self.count, self._device)
+            indices = self._backend_utils.resolve_indices(
+                indices, self.count, self._device
+            )
             read_idx = 0
             for i in indices:
                 if self._mass_apis[i.tolist()] is None:
                     if self._prims[i.tolist()].HasAPI(UsdPhysics.MassAPI):
-                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI(self._prims[i.tolist()])
+                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI(
+                            self._prims[i.tolist()]
+                        )
                     else:
-                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI.Apply(self._prims[i.tolist()])
+                        self._mass_apis[i.tolist()] = UsdPhysics.MassAPI.Apply(
+                            self._prims[i.tolist()]
+                        )
                 self._mass_apis[i.tolist()].GetMassAttr().Set(masses[read_idx].tolist())
                 read_idx += 1
             return
 
     def get_coms(
-        self,
-        env_indices: Optional[torch.Tensor] = None,
-        clone: bool = True
+        self, env_indices: Optional[torch.Tensor] = None, clone: bool = True
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         indices = self._resolve_env_indices(env_indices)
         positions, orientations = super().get_coms(indices, clone)
@@ -583,24 +726,20 @@ class RigidPrimView(_RigidPrimView):
         self,
         positions: torch.Tensor = None,
         # orientations: torch.Tensor = None,
-        env_indices: torch.Tensor = None
+        env_indices: torch.Tensor = None,
     ) -> None:
         # TODO@btx0424 fix orientations
         indices = self._resolve_env_indices(env_indices)
         return super().set_coms(positions.reshape(-1, 1, 3), None, indices)
 
     def get_inertias(
-        self,
-        env_indices: Optional[torch.Tensor]=None,
-        clone: bool=True
+        self, env_indices: Optional[torch.Tensor] = None, clone: bool = True
     ) -> torch.Tensor:
         indices = self._resolve_env_indices(env_indices)
         return super().get_inertias(indices, clone).unflatten(0, self.shape)
 
     def set_inertias(
-        self,
-        values: torch.Tensor,
-        env_indices: Optional[torch.Tensor]=None
+        self, values: torch.Tensor, env_indices: Optional[torch.Tensor] = None
     ):
         indices = self._resolve_env_indices(env_indices)
         return super().set_inertias(values.reshape(-1, 9), indices)
@@ -623,9 +762,13 @@ class RigidPrimView(_RigidPrimView):
 @contextmanager
 def disable_warnings(physics_sim_view):
     try:
-        if physics_sim_view is not None and hasattr(physics_sim_view, "enable_warnings"):
+        if physics_sim_view is not None and hasattr(
+            physics_sim_view, "enable_warnings"
+        ):
             physics_sim_view.enable_warnings(False)
         yield
     finally:
-        if physics_sim_view is not None and hasattr(physics_sim_view, "enable_warnings"):
+        if physics_sim_view is not None and hasattr(
+            physics_sim_view, "enable_warnings"
+        ):
             physics_sim_view.enable_warnings(True)
