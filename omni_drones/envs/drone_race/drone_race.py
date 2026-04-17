@@ -225,11 +225,25 @@ class DroneRaceEnv(IsaacEnv):
             (gate_world_pos, gate_world_rot)
         )
 
+        # Convert gate origins (bottom-center) to gate centers before planning.
+        gate_center_offset_local = torch.tensor(
+            [0.0, 0.0, self.gate_height / 2.0],
+            device=self.device,
+            dtype=gate_env_pos.dtype,
+        )
+        gate_center_offset = gate_center_offset_local.view(1, 1, 3).expand(
+            self.num_envs, self.num_gates, 3
+        )
+        gate_center_offset_world = quat_rotate(
+            gate_env_rot.reshape(-1, 4), gate_center_offset.reshape(-1, 3)
+        ).reshape(self.num_envs, self.num_gates, 3)
+        gate_env_centers = gate_env_pos + gate_center_offset_world
+
         trajectories = []
         for env_idx in range(self.num_envs):
             trajectories.append(
                 generate_trajectory_from_gate_poses(
-                    gate_env_pos[env_idx],
+                    gate_env_centers[env_idx],
                     gate_env_rot[env_idx],
                     method=self.trajectory_method,
                     num_points=self.trajectory_num_points,
