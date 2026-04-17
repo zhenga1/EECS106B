@@ -138,6 +138,7 @@ gate_width: 2.5
 # Sources: MPCC (TRO 2022), MPCC++ (2024), Swift (Nature 2023), MonoRace
 # (2026), MPPI ref-free (2024), Actor-Critic MPC (TRO 2025), TOGT (2023).
 
+w_approach:   2.0    # [KY, Claude] reward per metre of approach to gate — bootstrap signal so PPO has non-zero gradient from the start
 w_progress:   2.0    # μ_v — reward per metre of forward progress (Δlag) along racing line
 w_contouring: 0.4    # q_c — penalty weight on contouring error² (lateral deviation from line)
 w_lag:        0.05   # q_l — penalty weight on normalised lag error² (pacing, generally small)
