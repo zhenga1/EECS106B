@@ -9,7 +9,13 @@ max_grad_norm: 5
 
 share_actor: true
 
-gradient_steps: 2048
+# gradient_steps: 2048
+gradient_steps: 512 
+# [KY, Claude] reduced from 2048 to 512 to stabilise 
+# training; with the larger batch size of 4096, 512 
+# gradient steps is sufficient for good performance 
+# and reduces the risk of overfitting to a small 
+#number of recent episodes.
 
 actor:
   hidden_units: [256, 128, 128]

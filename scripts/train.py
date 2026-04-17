@@ -54,8 +54,11 @@ def main(cfg):
 
     # If the task yaml specifies a ppo_cfg field, load that file from cfg/algo/
     # and merge it over the default algo config, allowing per-task PPO settings.
+    # Only applied when actually using a PPO variant — skipped for SAC/TD3/etc.
+    # so that ppo_cfg does not overwrite algo name and corrupt non-PPO runs.
+    PPO_ALGOS = {"ppo", "ppo_rnn", "ppo_adapt", "mappo", "happo"}
     ppo_cfg_name = cfg.task.get("ppo_cfg", None)
-    if ppo_cfg_name:
+    if ppo_cfg_name and cfg.algo.name.lower() in PPO_ALGOS:
         import pathlib
         algo_dir = pathlib.Path(__file__).parent.parent / "cfg" / "algo"
         ppo_cfg_path = algo_dir / ppo_cfg_name
