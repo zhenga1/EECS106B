@@ -218,6 +218,35 @@ class DroneRaceEnv(IsaacEnv):
         self.hover_cmd_thrust = None
 
         print(f"[DroneRaceEnv] num_envs={self.num_envs}, num_gates={self.num_gates}")
+
+        # [KY] Build one reference trajectory per environment in env frame.
+        gate_world_pos, gate_world_rot = self.gates.get_world_poses()
+        gate_env_pos, gate_env_rot = self.get_env_poses(
+            (gate_world_pos, gate_world_rot)
+        )
+
+        trajectories = []
+        for env_idx in range(self.num_envs):
+            trajectories.append(
+                generate_trajectory_from_gate_poses(
+                    gate_env_pos[env_idx],
+                    gate_env_rot[env_idx],
+                    method=self.trajectory_method,
+                    num_points=self.trajectory_num_points,
+                )
+            )
+
+        self.global_trajectories = torch.stack(
+            trajectories, dim=0
+        )  # (num_envs, num_points, 3) is used for per-env trajectory progress
+
+        self.global_trajectory = self.global_trajectories[0]
+
+        print(
+            f"[DroneRaceEnv] global trajectories generated with {self.trajectory_method} method and {self.trajectory_num_points} points!"
+        )
+        # [KY] END of trajectory generation
+
         # Track gate progress for each environment
         self.gate_indices = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long
@@ -228,9 +257,11 @@ class DroneRaceEnv(IsaacEnv):
         self.track_completed = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.bool
         )
+        # Per-environment progress tracking for MPCC reward and trajectory following
+        # Each environment tracks its own previous lag and distance to gate
         self.prev_distance_to_gate = torch.zeros(self.num_envs, device=self.device)
-        # MPCC state: previous lag (progress along racing line) for Δlag computation
         self.prev_lag = torch.zeros(self.num_envs, device=self.device)
+
         # Gate crossing detection: drone position in gate frame from previous step
         self.gate_width = cfg.task.get("gate_width", 1.0)
         self.prev_drone_in_gate_frame = torch.zeros(
@@ -301,26 +332,6 @@ class DroneRaceEnv(IsaacEnv):
             )  # Length of axis lines
         else:
             self.draw = None
-
-        # [KY] Build one reference trajectory per environment in env frame.
-        gate_world_pos, gate_world_rot = self.gates.get_world_poses()
-        gate_env_pos, gate_env_rot = self.get_env_poses(
-            (gate_world_pos, gate_world_rot)
-        )
-
-        trajectories = []
-        for env_idx in range(self.num_envs):
-            trajectories.append(
-                generate_trajectory_from_gate_poses(
-                    gate_env_pos[env_idx],
-                    gate_env_rot[env_idx],
-                    method=self.trajectory_method,
-                    num_points=self.trajectory_num_points,
-                )
-            )
-
-        self.global_trajectories = torch.stack(trajectories, dim=0)
-        self.global_trajectory = self.global_trajectories[0]
 
     def _draw_gate_origins(self, gate_world_pos, gate_world_rot, env_idx=0):
         """
@@ -1152,35 +1163,39 @@ class DroneRaceEnv(IsaacEnv):
         # ── 0. Use per-environment global trajectory for MPCC decomposition ────
         # global_traj: (N, num_points, 3), one trajectory per environment.
         global_traj = self.global_trajectories
-        drone_pos_exp = drone_pos_flat.unsqueeze(
-            1
-        )  # (N, 1, 3) - Expand drone positions for broadcasting
-        dists = torch.norm(
-            global_traj - drone_pos_exp, dim=-1
-        )  # (N, num_points) - Compute distance from each drone to all points on the global trajectory
-        closest_idx = torch.argmin(
-            dists, dim=1
-        )  # (N,) - Find index of closest trajectory point for each drone
-        traj_batch_idx = torch.arange(self.num_envs, device=self.device)
-        closest_point = global_traj[
-            traj_batch_idx, closest_idx
-        ]  # (N, 3) - Get the closest point on each env trajectory
 
-        # Compute tangent at closest point using finite difference
-        next_idx = torch.clamp(
-            closest_idx + 1, max=global_traj.shape[1] - 1
-        )  # (N,) - Next index (clamped)
-        prev_idx = torch.clamp(
-            closest_idx - 1, min=0
-        )  # (N,) - Previous index (clamped)
+        # Expand drone positions for broadcasting: (N, 1, 3)
+        drone_pos_exp = drone_pos_flat.unsqueeze(1)
+
+        # Compute distance from each drone to all points on the global trajectory: (N, num_points)
+        dists = torch.norm(global_traj - drone_pos_exp, dim=-1)
+
+        # Find index of closest trajectory point for each drone: (N,)
+        closest_idx = torch.argmin(dists, dim=1)
+
+        # Batch indices for advanced indexing
+        traj_batch_idx = torch.arange(self.num_envs, device=self.device)
+
+        # Get the closest point on each env trajectory: (N, 3)
+        closest_point = global_traj[traj_batch_idx, closest_idx]
+
+        # Next index (clamped): (N,)
+        next_idx = torch.clamp(closest_idx + 1, max=global_traj.shape[1] - 1)
+
+        # Previous index (clamped): (N,)
+        prev_idx = torch.clamp(closest_idx - 1, min=0)
+
+        # Tangent vector at closest point: (N, 3)
         tangent = (
             global_traj[traj_batch_idx, next_idx]
             - global_traj[traj_batch_idx, prev_idx]
-        )  # (N, 3) - Tangent vector at closest point
-        tangent_norm = torch.norm(tangent, dim=-1, keepdim=True).clamp(
-            min=1e-6
-        )  # (N, 1) - Normalize tangent
-        path_tangent = tangent / tangent_norm  # (N, 3) - Unit tangent vector
+        )
+
+        # Normalize tangent: (N, 1)
+        tangent_norm = torch.norm(tangent, dim=-1, keepdim=True).clamp(min=1e-6)
+
+        # Unit tangent vector: (N, 3)
+        path_tangent = tangent / tangent_norm
 
         # Error vector: drone position relative to closest point on trajectory
         error_vec = drone_pos_flat - closest_point  # (N, 3)
