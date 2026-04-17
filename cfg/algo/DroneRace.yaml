@@ -1,8 +1,8 @@
 name: ppo
 
 # ---- STUDENT EDIT: PPO training schedule ---------------------------------
-train_every: 32   # <-- EDIT: collect this many env steps before each update
-ppo_epochs: 8     # <-- EDIT: number of gradient epochs per update
+train_every: 256   # <-- EDIT: collect this many env steps before each update  [KY, Claude] increased from 32: larger batch means less noisy GAE returns and more diverse experience per update
+ppo_epochs: 4     # <-- EDIT: number of gradient epochs per update  [KY, Claude] reduced from 8: 8 epochs on the original small batch caused the explained_var crash seen at step ~420
 # --------------------------------------------------------------------------
 num_minibatches: 5
 clip_param: 0.2
