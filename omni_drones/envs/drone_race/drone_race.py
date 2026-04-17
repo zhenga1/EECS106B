@@ -157,6 +157,7 @@ class DroneRaceEnv(IsaacEnv):
             "w_smooth", 0.001
         )  # action-rate penalty (Swift r_cmd)
         self.w_completion = cfg.task.get("w_completion", 50.0)  # full-lap bonus
+        self.w_approach = cfg.task.get("w_approach", 2.0)  # [KY, Claude] bootstrap signal: reward per metre of approach toward current gate
         self.trajectory_method = cfg.task.get("trajectory_method", "spline")
         self.trajectory_num_points = int(cfg.task.get("trajectory_num_points", 200))
         # Legacy aliases so the crash section and other code still works
@@ -607,7 +608,7 @@ class DroneRaceEnv(IsaacEnv):
         self.track_completed[env_ids] = False
         self.last_action[env_ids] = 0.0
         self.effort[env_ids] = 0.0  # Adding this line changes the result
-        self.prev_lag[env_ids] = 0.0  # MPCC: reset progress along racing line
+        # [KY, Claude] prev_lag is initialized below after drone_start_pos is known; zero-init caused a spurious -3.0 reward spike on the first step of every episode
 
         # Reset gate velocities to prevent drift (gates are static, so we just zero velocities)
         # Set velocities to zero for all gates in reset environments
@@ -650,10 +651,27 @@ class DroneRaceEnv(IsaacEnv):
                 first_gate_rot, offset_local_expanded
             )  # (len(env_ids), 3)
 
-            # TODO You can comment out lines below for random drone start position
-            # pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
-            # drone_start_pos = first_gate_pos + offset_world + pos_perturbation  # (len(env_ids), 3)
-            drone_start_pos = first_gate_pos + offset_world  # (len(env_ids), 3)
+            # [KY, Claude] Enable position randomisation so 500 parallel envs have diverse
+            # starting states, reducing gradient correlation across the batch.
+            pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
+            drone_start_pos = first_gate_pos + offset_world + pos_perturbation  # (len(env_ids), 3)
+
+            # [KY, Claude] Initialize prev_lag to the actual lag at the drone's start position
+            # so that delta_lag = 0 on the first step (no spurious reward spike).
+            # Uses the same closest-point projection as _compute_reward_and_done.
+            reset_traj = self.global_trajectories[env_ids]          # (M, num_points, 3)
+            drone_pos_exp = drone_start_pos.unsqueeze(1)             # (M, 1, 3)
+            dists = torch.norm(reset_traj - drone_pos_exp, dim=-1)   # (M, num_points)
+            closest_idx = torch.argmin(dists, dim=1)                 # (M,)
+            reset_batch_idx = torch.arange(len(env_ids), device=self.device)
+            closest_point = reset_traj[reset_batch_idx, closest_idx] # (M, 3)
+            next_idx = torch.clamp(closest_idx + 1, max=reset_traj.shape[1] - 1)
+            prev_idx = torch.clamp(closest_idx - 1, min=0)
+            tangent = (reset_traj[reset_batch_idx, next_idx]
+                       - reset_traj[reset_batch_idx, prev_idx])
+            tangent = tangent / torch.norm(tangent, dim=-1, keepdim=True).clamp(min=1e-6)
+            error_vec = drone_start_pos - closest_point              # (M, 3)
+            self.prev_lag[env_ids] = (error_vec * tangent).sum(dim=-1).detach()
 
             drone_start_pos_with_agent = drone_start_pos.unsqueeze(
                 1
@@ -1226,9 +1244,15 @@ class DroneRaceEnv(IsaacEnv):
         delta_lag = torch.where(
             gate_index_changed, torch.zeros_like(delta_lag), delta_lag
         )  # Reset progress if gate index changed
+        # [KY, Claude] Clamp delta_lag to a physically plausible per-step range (~10x max speed).
+        # Prevents huge reward spikes when argmin flips between trajectory endpoints:
+        # gate 0 == gate 4 in the circular track, so idx can jump 0 ↔ 199 in one step.
+        delta_lag = delta_lag.clamp(-0.5, 0.5)
 
-        # Normalised lag error (relative to a nominal segment length, e.g., 1.0)
-        lag_err = torch.clamp(lag, 0.0, 1.5)  # (N,)
+        # [KY, Claude] Bug fix: original code used clamp(lag, 0, 1.5), which penalised the drone
+        # for being *ahead* of the nearest trajectory point (i.e. normal forward progress).
+        # Correct MPCC e_l semantics: penalise falling *behind* (lag < 0).
+        lag_err = torch.clamp(-lag, 0.0, 1.5)  # (N,)
 
         # ── 2. Reward terms ──────────────────────────────────────────────
         # 2a. Progress reward  (MPCC's μ_v·Δθ)
@@ -1278,9 +1302,16 @@ class DroneRaceEnv(IsaacEnv):
         # 2i. Lap completion bonus
         completion_bonus = self.track_completed.float() * self.w_completion  # (N,)
 
+        # 2j. [KY, Claude] Gate approach reward — positive when closing distance to current gate.
+        # Primary bootstrap signal: unlike delta_lag (which is ~0 when the drone hovers near
+        # the trajectory endpoint), this fires any time the drone moves toward the gate,
+        # giving PPO a non-zero gradient from the very first episode.
+        approach_reward = (self.prev_distance_to_gate - distance_to_gate) * self.w_approach  # (N,)
+
         # ── 3. Total reward ──────────────────────────────────────────────
         reward = (
-            progress_reward  # MPCC μ_v·Δθ  — primary driver
+            approach_reward   # bootstrap — move toward current gate
+            + progress_reward  # MPCC μ_v·Δθ  — primary driver
             + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
             + lag_penalty  # MPCC q_l·e_l² — pacing (small)
             + gate_bonus  # Swift          — discrete gate reward
