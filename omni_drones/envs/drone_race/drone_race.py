@@ -651,10 +651,10 @@ class DroneRaceEnv(IsaacEnv):
                 first_gate_rot, offset_local_expanded
             )  # (len(env_ids), 3)
 
-            # [KY, Claude] Enable position randomisation so 500 parallel envs have diverse
-            # starting states, reducing gradient correlation across the batch.
+            # TODO You can comment out lines below for random drone start position
             pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
             drone_start_pos = first_gate_pos + offset_world + pos_perturbation  # (len(env_ids), 3)
+            # drone_start_pos = first_gate_pos + offset_world  # (len(env_ids), 3)
 
             # [KY, Claude] Initialize prev_lag to the actual lag at the drone's start position
             # so that delta_lag = 0 on the first step (no spurious reward spike).
@@ -673,12 +673,11 @@ class DroneRaceEnv(IsaacEnv):
             error_vec = drone_start_pos - closest_point              # (M, 3)
             self.prev_lag[env_ids] = (error_vec * tangent).sum(dim=-1).detach()
 
-            drone_start_pos_with_agent = drone_start_pos.unsqueeze(
-                1
-            )  # (len(env_ids), 1, 3)
-            env_positions_with_agent = self.envs_positions[env_ids].unsqueeze(
-                1
-            )  # (len(env_ids), 1, 3)
+            # (len(env_ids), 1, 3)
+            drone_start_pos_with_agent = drone_start_pos.unsqueeze(1) 
+            
+            # (len(env_ids), 1, 3)
+            env_positions_with_agent = self.envs_positions[env_ids].unsqueeze(1)  
 
             self.drone.set_world_poses(
                 drone_start_pos_with_agent + env_positions_with_agent,
