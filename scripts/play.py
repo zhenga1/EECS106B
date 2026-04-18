@@ -19,7 +19,7 @@ from omni_drones.utils.torchrl.transforms import (
     AttitudeController,
     RateController,
 )
-from omni_drones.utils.torchrl import EpisodeStats
+from omni_drones.utils.torchrl import AgentSpec, EpisodeStats
 from omni_drones.learning import ALGOS
 
 from setproctitle import setproctitle
@@ -33,6 +33,26 @@ def main(cfg):
     OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
+
+    # If the task yaml specifies a ppo_cfg field, load that file from cfg/algo/
+    # and merge it over the default algo config, allowing per-task PPO settings.
+    # Only applied when actually using a PPO variant — skipped for SAC/TD3/etc.
+    # so that ppo_cfg does not overwrite algo name and corrupt non-PPO runs.
+    PPO_ALGOS = {"ppo", "ppo_rnn", "ppo_adapt", "mappo", "happo"}
+    ppo_cfg_name = cfg.task.get("ppo_cfg", None)
+    if ppo_cfg_name and cfg.algo.name.lower() in PPO_ALGOS:
+        import pathlib
+        algo_dir = pathlib.Path(__file__).parent.parent / "cfg" / "algo"
+        ppo_cfg_path = algo_dir / ppo_cfg_name
+        if not ppo_cfg_path.suffix:
+            ppo_cfg_path = ppo_cfg_path.with_suffix(".yaml")
+        if ppo_cfg_path.exists():
+            logging.info(f"Loading task-specific PPO config: {ppo_cfg_path}")
+            task_ppo_cfg = OmegaConf.load(ppo_cfg_path)
+            cfg.algo = OmegaConf.merge(cfg.algo, task_ppo_cfg)
+        else:
+            logging.warning(f"ppo_cfg '{ppo_cfg_name}' not found at {ppo_cfg_path}, using default.")
+
     simulation_app = init_simulation_app(cfg)
 
     setproctitle(cfg.task.name)
@@ -112,15 +132,37 @@ def main(cfg):
     env.set_seed(cfg.seed)
 
     try:
-        policy = ALGOS[cfg.algo.name.lower()](
+        algo_cls = ALGOS[cfg.algo.name.lower()]
+    except KeyError:
+        raise NotImplementedError(f"Unknown algorithm: {cfg.algo.name}")
+
+    # SAC and TD3 use the old AgentSpec API; PPO variants use the new
+    # (observation_spec, action_spec, reward_spec) API.
+    OLD_API_ALGOS = {"sac", "td3", "tdmpc"}
+    if cfg.algo.name.lower() in OLD_API_ALGOS:
+        agent_spec = AgentSpec(
+            name="drone",
+            n=1,
+        )
+        agent_spec._env = env
+        policy = algo_cls(
+            cfg.algo,
+            agent_spec=agent_spec,
+            device=base_env.device,
+        )
+    else:
+        policy = algo_cls(
             cfg.algo,
             env.observation_spec,
             env.action_spec,
             env.reward_spec,
-            device=base_env.device
+            device=base_env.device,
         )
-    except KeyError:
-        raise NotImplementedError(f"Unknown algorithm: {cfg.algo.name}")
+
+    checkpoint_path = cfg.get("checkpoint_path", None)
+    if checkpoint_path:
+        policy.load_state_dict(torch.load(checkpoint_path))
+        print(f"Loaded checkpoint from {checkpoint_path}")
 
     frames_per_batch = env.num_envs * 32
 

@@ -21,7 +21,7 @@ drone_model:
   name: Iris
   controller: RateController
 
-total_frames: 200_000_000
+total_frames: 1_000_000_000
 save_interval: 100 
 # seed: 0
 
