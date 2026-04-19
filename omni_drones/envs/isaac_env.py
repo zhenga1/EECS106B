@@ -62,11 +62,10 @@ class DebugDraw:
         if not (x.ndim == 2) and (x.shape[1] == 3):
             raise ValueError("x must be a tensor of shape (N, 3).")
         x = x.cpu()
-        point_list_0 = x[:-1].tolist()
-        point_list_1 = x[1:].tolist()
-        sizes = [size] * len(point_list_0)
-        colors = [color] * len(point_list_0)
-        self._draw.draw_lines(point_list_0, point_list_1, colors, sizes)
+        point_list_0 = [tuple(p) for p in x[:-1].tolist()]
+        point_list_1 = [tuple(p) for p in x[1:].tolist()]
+        n = len(point_list_0)
+        self._draw.draw_lines(point_list_0, point_list_1, [color] * n, [size] * n)
 
     def vector(
         self, x: torch.Tensor, v: torch.Tensor, size=2.0, color=(0.0, 1.0, 1.0, 1.0)
@@ -79,11 +78,25 @@ class DebugDraw:
                     x.shape, v.shape
                 )
             )
-        point_list_0 = x.tolist()
-        point_list_1 = (x + v).tolist()
-        sizes = [size] * len(point_list_0)
-        colors = [color] * len(point_list_0)
-        self._draw.draw_lines(point_list_0, point_list_1, colors, sizes)
+        point_list_0 = [tuple(p) for p in x.tolist()]
+        point_list_1 = [tuple(p) for p in (x + v).tolist()]
+        n = len(point_list_0)
+        self._draw.draw_lines(point_list_0, point_list_1, [color] * n, [size] * n)
+
+    def plot_multi(self, x: torch.Tensor, size: float = 2.0, color=(1.0, 1.0, 1.0, 1.0)):
+        """Draw trajectory segments for all envs in one draw_lines call.
+        Args:
+            x: (E, P, 3) — E trajectories, P waypoints each.
+        """
+        if x.ndim != 3 or x.shape[2] != 3:
+            raise ValueError("x must be shape (E, P, 3).")
+        x = x.cpu()
+        p0 = x[:, :-1, :].reshape(-1, 3)   # (E*(P-1), 3)
+        p1 = x[:, 1:, :].reshape(-1, 3)    # (E*(P-1), 3)
+        n = p0.shape[0]
+        point_list_0 = [tuple(p) for p in p0.tolist()]
+        point_list_1 = [tuple(p) for p in p1.tolist()]
+        self._draw.draw_lines(point_list_0, point_list_1, [color] * n, [size] * n)
 
 
 class IsaacEnv(EnvBase):
@@ -285,11 +298,21 @@ class IsaacEnv(EnvBase):
             env_mask = torch.ones(self.num_envs, dtype=bool, device=self.device)
         env_ids = env_mask.nonzero().squeeze(-1)
 
+        # Save terminal stats BEFORE _reset_idx zeroes them.
+        # TorchRL auto-reset merges _reset()'s output back into ("next", "stats")
+        # for done envs, so without this save the collector always reads zeroed stats.
+        terminal_stats = self.stats.clone()
+
         self._reset_idx(env_ids)
 
         self.progress_buf[env_ids] = 0.0
         tensordict = TensorDict({}, self.batch_size, device=self.device)
         tensordict.update(self._compute_state_and_obs())
+
+        # Restore terminal stats for done envs so EpisodeStats captures
+        # the end-of-episode values, not the post-reset zeros.
+        tensordict["stats"][env_ids] = terminal_stats[env_ids]
+
         tensordict.set(
             "truncated", (self.progress_buf > self.max_episode_length).unsqueeze(1)
         )

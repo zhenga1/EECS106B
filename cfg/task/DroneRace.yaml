@@ -145,8 +145,9 @@ gate_width: 2.5
 # → all episodes identical → return variance ≈ 0 → explained_var = -∞.
 w_alive:      0.5    # per-step bonus for staying above min_alive_z (key bootstrap)
 w_upright:    1.0    # bonus for drone z-axis pointing up (prevents tumbling)
-w_altitude:   0.5    # exp(-|z - gate_z|) bonus for flying at gate height
-min_alive_z:  0.3    # minimum altitude (m) to receive alive bonus
+w_altitude:   2.0    # exp(-|z - gate_z|) bonus for flying at gate height
+min_alive_z:  1.0    # minimum altitude (m) to receive alive bonus
+w_vel_up: 0.5   # reward for upward velocity when below gate height
 
 # ── Approach / progress rewards ────────────────────────────────────────────
 w_approach:   2.0    # reward per metre of approach to gate (dense bootstrap signal)
@@ -160,9 +161,9 @@ w_contouring: 0.1    # q_c — penalty weight on contouring error² (lateral dev
 w_lag:        0.05   # q_l — penalty weight on normalised lag error² (pacing)
 
 # ── Gate / completion bonuses ──────────────────────────────────────────────
-w_gate:       10.0   # one-time bonus for passing through a gate (Swift)
+w_gate:       50.0   # one-time bonus for passing through a gate (Swift)
 w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT)
-w_completion: 50.0   # large bonus for completing the full lap
+w_completion: 500.0   # large bonus for completing the full lap
 
 # ── Speed / time rewards ───────────────────────────────────────────────────
 # Increased w_speed 0.04 → 0.15 and w_time 0.01 → 0.05:
@@ -174,7 +175,9 @@ w_time:       0.05   # per-step cost to encourage speed (Swift)
 # ── Crash / smoothness ─────────────────────────────────────────────────────
 # Increased w_crash 10 → 20: crash_penalty is now actually applied (it was
 # defined but unused in the reward sum — now fixed in drone_race.py).
-w_crash:      20.0   # penalty on crash termination (now applied in reward)
+w_crash:      20.0   # base crash penalty × cone_dist (dimensionless)
+crash_lag_ref: 5.0  # reference approach dist (m); with gate_width/2=1.25m → cone half-angle ≈14°
+w_bypass:     15.0  # one-time penalty for crossing the gate plane outside the opening
 w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
 # ──────────────────────────────────────────────────────────────────────────
 

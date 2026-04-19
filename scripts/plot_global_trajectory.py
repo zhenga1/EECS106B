@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """Plot global trajectory generated from DroneRace track config.
 
-Usage:
+Usage (run from repo root EECS106B/):
   python scripts/plot_global_trajectory.py \
       --config cfg/task/DroneRace.yaml \
-      --num-points 200 \
-      --method spline \
-      --out debug/global_trajectory_plot.png
+      --method catmull_rom \
+      --num-points 300 \
+      --out debug/traj.png
 
-Add --show to open an interactive window when running with a display
-(equivalent to non-headless plotting).
+Add --show to open an interactive window when running with a display.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+# Make omni_drones importable when the script is run directly from any cwd.
+_repo_root = Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
 
 import matplotlib.pyplot as plt
 import torch
@@ -55,8 +60,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--method",
-        default="spline",
-        choices=["linear", "spline"],
+        default="catmull_rom",
+        choices=["linear", "spline", "catmull_rom"],
         help="Trajectory interpolation method",
     )
     parser.add_argument(

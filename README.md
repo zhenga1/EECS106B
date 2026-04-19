@@ -52,7 +52,7 @@ distrobox enter grasping
 We set up a virtual environment, that you can source with 
 
 ```
-source /opt/venv/drone_venv/bin/activate
+source /opt/drone_venv/bin/activate
 ```
 
 You will also need to source the isaac lab venv as the same in project 4b
@@ -69,7 +69,11 @@ The `drone_model["controller"]` field in `cfg/task/Hover.yaml`, specifies the co
 Inside distrobox,
 
 ```
-python3 scripts/train.py algo=ppo headless=true
+python3 scripts/train.py algo=ppo headless=true total_frames=50000000 task=DroneRace wandb.run_name=test_run
+```
+
+```
+python3 scripts/train.py algo=ppo task=DroneRace headless=false wandb.run_name=ppo_test total_frames=1000000000
 ```
 
 If you haven't setup wandb, run `python train.py algo=ppo headless=true wandb.mode=disabled` instead. If you see PPO training logs (e.g., average reward metrics), your setup is working.

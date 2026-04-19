@@ -10,7 +10,7 @@ clip_param: 0.2
 # Rationale: policy collapsed to "lie on ground" at entropy≈2. Higher entropy
 # coef keeps the distribution broader during early training so the drone
 # can explore different thrust levels and discover that flying is rewarded.
-entropy_coef: 0.01
+entropy_coef: 0.003
 gae_lambda: 0.95
 gamma: 0.99
 max_grad_norm: 5.0
@@ -23,7 +23,7 @@ priv_critic: false
 
 actor:
   # ---- STUDENT EDIT: actor network --------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
+  lr: 0.0001                # <-- EDIT: learning rate
   hidden_units: [256, 256, 256]  # <-- EDIT: list of hidden layer sizes, e.g. [256, 256, 256]
   activation: elu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
@@ -34,7 +34,7 @@ actor:
 
 critic:
   # ---- STUDENT EDIT: critic network -------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
+  lr: 0.0003                # <-- EDIT: learning rate
   hidden_units: [256, 256, 256]  # <-- EDIT: list of hidden layer sizes
   activation: elu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------

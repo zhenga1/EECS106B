@@ -450,8 +450,9 @@ class RateControllerSimple(ControllerBase):
         )
 
         self.mixer = nn.Parameter(compute_parameters(rotor_config, I))
+        self.I = I[:3, :3]  # Store inertia matrix for gyroscopic term
         self.gain_angular_rate = nn.Parameter(
-            torch.tensor([0.52, 0.52, 0.025]) @ I[:3, :3].inverse()
+            torch.tensor([0.52, 0.52, 0.025]) @ self.I.inverse()
         )
 
 
@@ -474,7 +475,7 @@ class RateControllerSimple(ControllerBase):
         rate_error = body_rate - target_rate
         acc_des = (
             - rate_error * self.gain_angular_rate
-            + angvel.cross(angvel)
+            + angvel.cross(self.I @ angvel)
         )
         angacc_thrust = torch.cat([acc_des, target_thrust], dim=1)
         cmd = (self.mixer @ angacc_thrust.T).T

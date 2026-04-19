@@ -5,7 +5,7 @@ from omni_drones.utils.bspline import get_knots, splev_torch
 def compute_global_trajectory(
     gate_positions,
     gate_normals,
-    method="linear",
+    method="catmull_rom",
     num_points=100,
     tangent_scale=1.0,
     k=3,
@@ -16,10 +16,29 @@ def compute_global_trajectory(
     Args:
         gate_positions: (N_gates, 3) tensor of gate center positions.
         gate_normals: (N_gates, 3) tensor of gate normals (desired tangents).
-        method: "linear" (default) or "spline" for smooth interpolation.
+        method: interpolation method — see below.
         num_points: Number of points in the trajectory.
-        tangent_scale: Scaling factor for tangent magnitude at endpoints.
-        k: Degree of B-spline (ignored if method is "linear").
+        tangent_scale: Scaling factor for tangent magnitude at endpoints
+                       (only used by the legacy "spline" method).
+        k: Degree of B-spline (only used by the legacy "spline" method).
+
+    Supported methods
+    -----------------
+    "catmull_rom" (recommended)
+        Arc-length-parameterised cubic Hermite interpolating spline built with
+        scipy.CubicSpline.  **Passes through every gate centre exactly.**
+        Endpoint tangents are set from gate_normals so the drone enters/exits
+        each terminal gate in the correct direction.
+
+    "linear"
+        Piecewise-linear interpolation.  Correct (passes through all gates)
+        but produces sharp corners at each gate.
+
+    "spline"  (legacy — has a known bug)
+        Approximate B-spline.  The endpoint-tangent Hermite patch overwrites
+        ctps[1] and ctps[-2] with tangent-direction guide points, causing the
+        trajectory to SKIP the second and second-to-last gates.  Kept for
+        backward compatibility; prefer "catmull_rom" for new runs.
 
     Returns:
         trajectory: (num_points, 3) tensor of waypoints.
@@ -46,14 +65,41 @@ def compute_global_trajectory(
         p0 = gate_positions[seg_idx]
         p1 = gate_positions[seg_idx + 1]
         trajectory = (1.0 - alpha) * p0 + alpha * p1
+
+    elif method == "catmull_rom":
+        # Interpolating cubic Hermite spline via scipy.CubicSpline.
+        # Unlike the legacy "spline" method, this ALWAYS passes through every
+        # gate centre.  Arc-length parameterisation gives uniform point
+        # density along the path.
+        import numpy as np
+        from scipy.interpolate import CubicSpline as _CubicSpline
+
+        gate_np = gate_positions.detach().cpu().numpy().astype(np.float64)  # (N, 3)
+        normals_np = gate_normals.detach().cpu().numpy().astype(np.float64)  # (N, 3)
+
+        # Arc-length parameter: t[i] = cumulative Euclidean distance to gate i.
+        diffs = np.diff(gate_np, axis=0)                        # (N-1, 3)
+        seg_lens = np.linalg.norm(diffs, axis=1)                # (N-1,)
+        t_params = np.concatenate([[0.0], np.cumsum(seg_lens)]) # (N,)
+
+        # Boundary conditions: match the gate's x-axis (normal) at each end.
+        # scipy encodes BC as (derivative_order, value_at_endpoint).
+        bc = [(1, normals_np[0]), (1, normals_np[-1])]
+
+        cs = _CubicSpline(t_params, gate_np, bc_type=bc)
+
+        t_samples = np.linspace(t_params[0], t_params[-1], int(num_points))
+        traj_np = cs(t_samples).astype(np.float32)              # (num_points, 3)
+        trajectory = torch.from_numpy(traj_np).to(gate_positions.device)
+
     elif method == "spline":
-        # Use gate normals to set endpoint tangents
+        # Legacy approximate B-spline — kept for backward compatibility.
+        # WARNING: overwrites ctps[1] and ctps[-2] with tangent guide points,
+        # causing the trajectory to skip gate 2 and gate N-1.
         n_ctps = n_gates
         ctps = gate_positions.clone()
         k_eff = min(int(k), n_ctps - 1)
 
-        # Adjust first and last control points to match normals
-        # (Hermite-style: set first derivative at endpoints)
         if n_ctps >= 4:
             ctps[1] = ctps[0] + tangent_scale * gate_normals[0]
             ctps[-2] = ctps[-1] - tangent_scale * gate_normals[-1]
@@ -68,7 +114,8 @@ def compute_global_trajectory(
         )
         trajectory = splev_torch(t_vals, knots, ctps, k_eff)
     else:
-        raise ValueError(f"Unknown method: {method}")
+        raise ValueError(f"Unknown trajectory method '{method}'. "
+                         f"Choose from: 'catmull_rom', 'linear', 'spline'.")
     return trajectory
 
 
@@ -93,7 +140,7 @@ def generate_trajectory_from_gate_poses(
         trajectory: (num_points, 3) tensor of waypoints.
     """
     # Compute gate normals (x-axis in world frame for each gate)
-    from omni_drones.utils.math import quat_rotate
+    from omni_drones.utils.torch import quat_rotate
 
     gate_local_x = torch.tensor(
         [1.0, 0.0, 0.0], device=gate_positions.device, dtype=gate_positions.dtype
