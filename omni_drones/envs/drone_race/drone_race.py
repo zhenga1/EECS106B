@@ -158,6 +158,16 @@ class DroneRaceEnv(IsaacEnv):
         )  # action-rate penalty (Swift r_cmd)
         self.w_completion = cfg.task.get("w_completion", 50.0)  # full-lap bonus
         self.w_approach = cfg.task.get("w_approach", 2.0)  # [KY, Claude] bootstrap signal: reward per metre of approach toward current gate
+        # ── Basic flight bootstrap rewards ─────────────────────────────────────
+        # An untrained policy outputs near-zero thrust → drone falls under gravity
+        # → all episodes crash in ~50 steps with identical returns → return variance
+        # near zero → explained_var = 1 − MSE/Var blows up to −∞.  These dense
+        # per-step rewards give PPO a non-zero gradient from step 1.
+        # References: Swift (alive/crash terms), MPCC++ (upright), deep-RL-racing.
+        self.w_alive     = cfg.task.get("w_alive", 0.5)     # per-step bonus for staying airborne
+        self.w_upright   = cfg.task.get("w_upright", 1.0)   # bonus for keeping z-axis pointing up
+        self.w_altitude  = cfg.task.get("w_altitude", 0.5)  # exp bonus for flying at gate height
+        self.min_alive_z = cfg.task.get("min_alive_z", 0.3) # minimum z to collect alive bonus
         self.trajectory_method = cfg.task.get("trajectory_method", "spline")
         self.trajectory_num_points = int(cfg.task.get("trajectory_num_points", 200))
         # Legacy aliases so the crash section and other code still works
@@ -414,6 +424,37 @@ class DroneRaceEnv(IsaacEnv):
                     [start_point], [end_point], [color], [3.0]  # Line width
                 )
 
+    def _draw_global_trajectory(self, env_idx: int = 0):
+        """Draw the pre-computed global trajectory for *env_idx* as cyan line segments.
+
+        Expects ``_draw_gate_origins`` to have already called ``clear_lines()``
+        this step, so this method simply appends to the current draw list.
+
+        The trajectory is stored in env-local frame; we add the env world offset
+        to convert to world coordinates for the debug draw interface.
+        """
+        if self.draw is None:
+            return
+
+        traj = self.global_trajectories[env_idx]          # (num_points, 3) env frame
+        env_offset = self.envs_positions[env_idx]          # (3,) world offset for env 0
+        traj_world = (traj + env_offset).cpu()             # (num_points, 3) world frame
+
+        starts = traj_world[:-1].tolist()                  # list of (num_points-1) [x,y,z]
+        ends   = traj_world[1:].tolist()
+
+        n = len(starts)
+        # Colour encodes arc-length progress: blue → green → yellow → red
+        colors = []
+        for i in range(n):
+            t = i / max(n - 1, 1)
+            r = min(1.0, 2.0 * t)
+            g = min(1.0, 2.0 * (1.0 - t))
+            b = max(0.0, 1.0 - 4.0 * abs(t - 0.5))
+            colors.append((r, g, b, 1.0))
+
+        self.draw.draw_lines(starts, ends, colors, [2.0] * n)
+
     def _design_scene(self):
         print("Designing scene")
         drone_model_cfg = self.cfg.task.drone_model
@@ -651,10 +692,11 @@ class DroneRaceEnv(IsaacEnv):
                 first_gate_rot, offset_local_expanded
             )  # (len(env_ids), 3)
 
+            drone_start_pos = first_gate_pos + offset_world 
             # [KY, Claude] Enable position randomisation so 500 parallel envs have diverse
             # starting states, reducing gradient correlation across the batch.
-            pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
-            drone_start_pos = first_gate_pos + offset_world + pos_perturbation  # (len(env_ids), 3)
+            # pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
+            # drone_start_pos = first_gate_pos + offset_world + pos_perturbation  # (len(env_ids), 3)
 
             # [KY, Claude] Initialize prev_lag to the actual lag at the drone's start position
             # so that delta_lag = 0 on the first step (no spurious reward spike).
@@ -1105,6 +1147,7 @@ class DroneRaceEnv(IsaacEnv):
             # print(f"Drone position (env frame): {torch.round(drone_pos[0, 0] * 100) / 100}")
             if self.debug_gate_origins:
                 self._draw_gate_origins(gate_world_pos, gate_world_rot, env_idx=0)
+                self._draw_global_trajectory(env_idx=0)
 
             batch_indices = torch.arange(self.num_envs, device=self.device)
             current_gate_pos = gate_env_pos[batch_indices, self.gate_indices]  # (N, 3)
@@ -1166,6 +1209,21 @@ class DroneRaceEnv(IsaacEnv):
         # configured in cfg/task/DroneRace.yaml.
         # -----------------------------------------------------------------------
         # ----- ADD YOUR REWARD CODE BELOW (replace the placeholder) -----
+        #
+        # ── 0.pre. Crash detection — computed here so crash_penalty appears on the
+        # terminal transition and PPO receives a gradient signal on crashes.
+        drone_up = quat_axis(drone_rot.squeeze(1), axis=2)  # (N, 3)
+        ground_crash  = drone_pos_flat[:, 2] < 0.15
+        bounds_crash  = (
+            (torch.abs(drone_pos_flat[:, 0]) > 30.0)
+            | (torch.abs(drone_pos_flat[:, 1]) > 30.0)
+            | (drone_pos_flat[:, 2] > 10.0)
+        )
+        flipped_crash = drone_up[:, 2] < -0.3
+        collision_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
+        contact_crash = collision_forces.squeeze(1).norm(dim=-1) > 1.0   # (N,)
+        crashed = ground_crash | bounds_crash | flipped_crash | contact_crash
+
         #
         # ══════════════════════════════════════════════════════════════════
         # MPCC-STYLE CONTOURING REWARD
@@ -1308,18 +1366,45 @@ class DroneRaceEnv(IsaacEnv):
         # giving PPO a non-zero gradient from the very first episode.
         approach_reward = (self.prev_distance_to_gate - distance_to_gate) * self.w_approach  # (N,)
 
+        # ── 2k–n. Basic flight bootstrap rewards ─────────────────────────
+        # Without these, an untrained policy falls to the ground in ~50 steps,
+        # all episodes get identical returns, return variance → 0, and
+        # explained_var = 1 − MSE/Var(returns) blows up to −2,000,000.
+        # These dense per-step terms give PPO a gradient signal from step 1.
+
+        # 2k. Alive bonus: reward every step the drone stays above the floor
+        alive_bonus = (drone_pos_flat[:, 2] > self.min_alive_z).float() * self.w_alive  # (N,)
+
+        # 2l. Upright bonus: reward keeping the drone's z-axis pointing up.
+        #     drone_up[:, 2] ∈ [-1, 1]; clamp to [0, 1] — only reward upright.
+        upright_bonus = drone_up[:, 2].clamp(min=0.0) * self.w_upright  # (N,)
+
+        # 2m. Altitude bonus: exponential reward for flying near the current gate's height.
+        #     Guides the drone to fly at gate altitude, not crawl along the ground.
+        target_z    = current_gate_center[:, 2]  # (N,)
+        altitude_err = torch.abs(drone_pos_flat[:, 2] - target_z)  # (N,)
+        altitude_bonus = torch.exp(-altitude_err) * self.w_altitude  # (N,)
+
+        # 2n. Crash penalty: apply w_crash on the step the drone crashes.
+        #     w_crash was defined in __init__ but was previously unused in reward.
+        crash_penalty = -crashed.float() * self.w_crash  # (N,)
+
         # ── 3. Total reward ──────────────────────────────────────────────
         reward = (
-            approach_reward   # bootstrap — move toward current gate
-            + progress_reward  # MPCC μ_v·Δθ  — primary driver
+            alive_bonus           # stay airborne (bootstrap)
+            + upright_bonus       # keep level (bootstrap)
+            + altitude_bonus      # fly at gate height (bootstrap)
+            + crash_penalty       # penalise crashes (w_crash now applied)
+            + approach_reward     # move toward current gate
+            + progress_reward     # MPCC μ_v·Δθ  — primary racing driver
             + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
-            + lag_penalty  # MPCC q_l·e_l² — pacing (small)
-            + gate_bonus  # Swift          — discrete gate reward
-            + centering_bonus  # TOGT           — cross through centre
-            + speed_bonus  # MonoRace/MPPI  — go fast
-            + time_penalty  # Swift          — urgency
-            + smooth_penalty  # Swift r_cmd    — don't oscillate
-            + completion_bonus  # lap done       — big payoff
+            + lag_penalty         # MPCC q_l·e_l² — pacing (small)
+            + gate_bonus          # Swift — gate passage bonus
+            + centering_bonus     # TOGT — centred crossing bonus
+            + speed_bonus         # MonoRace/MPPI — fast flight
+            + time_penalty        # Swift — urgency
+            + smooth_penalty      # Swift r_cmd — action smoothness
+            + completion_bonus    # full-lap completion bonus
         )  # (N,)
 
         # ── 4. Update state for next step ────────────────────────────────
@@ -1335,34 +1420,12 @@ class DroneRaceEnv(IsaacEnv):
         # ----- END STUDENT CODE -----
 
         # -----------------------------------------------------------------------
-        # STUDENT TODO (3/3): Implement the crash / termination condition.
-        # You might need to add geometric out-of-bounds checks.
+        # Crash / termination condition — computed above (before the reward)
+        # so that crash_penalty is included on the terminal transition.
+        # Components: ground_crash | bounds_crash | flipped_crash | contact_crash
+        # Variables drone_up, ground_crash, bounds_crash, flipped_crash,
+        # contact_crash, and crashed are all already defined above.
         # -----------------------------------------------------------------------
-        # ----- ADD YOUR CRASH CONDITION BELOW (replace the placeholder) -----
-
-        # a) Ground collision: drone below safe altitude
-        ground_crash = drone_pos_flat[:, 2] < 0.15  # (N,)
-
-        # b) Out of bounds: too far from track area
-        #    Use generous bounds based on gate positions
-        bounds_crash = (
-            (torch.abs(drone_pos_flat[:, 0]) > 30.0)
-            | (torch.abs(drone_pos_flat[:, 1]) > 30.0)
-            | (drone_pos_flat[:, 2] > 10.0)
-        )
-
-        # c) Flipped: drone's z-axis pointing downward (upside down beyond recovery)
-        drone_up = quat_axis(drone_rot.squeeze(1), axis=2)  # (N, 3)
-        flipped_crash = drone_up[:, 2] < -0.3  # z-component of up vector < -0.3
-
-        # d) Contact forces: physical collision with gates or ground
-        #    Contact forces are tracked on the drone's base_link (see multirotor.py)
-        collision_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
-        contact_crash = collision_forces.squeeze(1).norm(dim=-1) > 1.0  # (N,)
-
-        crashed = ground_crash | bounds_crash | flipped_crash | contact_crash
-
-        # ----- END STUDENT CODE -----
         truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
         completed_task = self.track_completed
         done = truncated | completed_task.unsqueeze(-1) | crashed.unsqueeze(-1)
@@ -1377,6 +1440,7 @@ class DroneRaceEnv(IsaacEnv):
             (self.gate_indices + self.track_completed.long()).float().unsqueeze(1)
         )
         # (optional) add extra stat tracking lines here if you add new metrics
+        self.stats["drone_uprightness"][:] = drone_up[:, 2].unsqueeze(1).detach()
 
         return TensorDict(
             {
