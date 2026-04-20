@@ -22,7 +22,7 @@ actor:
 
   # mlp
   hidden_units: [128, 128, 128]
-  activation: relu  # relu, leaky_relu, elu, gelu, tanh, silu
+  activation: leaky_relu  # relu, leaky_relu, elu, gelu, tanh, silu
   layer_norm: true
 
   weight_decay: 0.0
@@ -34,7 +34,7 @@ critic:
 
   # mlp
   hidden_units: [128, 128, 128]
-  activation: relu  # relu, leaky_relu, elu, gelu, tanh, silu
+  activation: leaky_relu  # relu, leaky_relu, elu, gelu, tanh, silu
   layer_norm: true
 
   weight_decay: 0.0

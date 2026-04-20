@@ -143,11 +143,10 @@ gate_width: 2.5
 # ── Bootstrap / basic-flight rewards ───────────────────────────────────────
 # Without these, an untrained policy outputs near-zero thrust → drone falls
 # → all episodes identical → return variance ≈ 0 → explained_var = -∞.
-w_alive:      0.5    # per-step bonus for staying above min_alive_z (key bootstrap)
+# w_alive pruned (covered by crash_penalty + stall termination)
 w_upright:    1.0    # bonus for drone z-axis pointing up (prevents tumbling)
 w_altitude:   2.0    # exp(-|z - gate_z|) bonus for flying at gate height
-min_alive_z:  1.0    # minimum altitude (m) to receive alive bonus
-w_vel_up: 0.5   # reward for upward velocity when below gate height
+# w_vel_up pruned (redundant with altitude_bonus)
 
 # ── Approach / progress rewards ────────────────────────────────────────────
 w_approach:   2.0    # reward per metre of approach to gate (dense bootstrap signal)
@@ -158,7 +157,7 @@ w_progress:   2.0    # μ_v — reward per metre of forward progress (Δlag) alo
 # penalty during early training just produces large negative rewards that swamp
 # the sparse gate bonuses and discourage exploration.
 w_contouring: 0.1    # q_c — penalty weight on contouring error² (lateral deviation)
-w_lag:        0.05   # q_l — penalty weight on normalised lag error² (pacing)
+# w_lag pruned (redundant with progress_reward + contouring_penalty)
 
 # ── Gate / completion bonuses ──────────────────────────────────────────────
 w_gate:       50.0   # one-time bonus for passing through a gate (Swift)
@@ -175,10 +174,17 @@ w_time:       0.05   # per-step cost to encourage speed (Swift)
 # ── Crash / smoothness ─────────────────────────────────────────────────────
 # Increased w_crash 10 → 20: crash_penalty is now actually applied (it was
 # defined but unused in the reward sum — now fixed in drone_race.py).
-w_crash:      20.0   # base crash penalty × cone_dist (dimensionless)
-crash_lag_ref: 5.0  # reference approach dist (m); with gate_width/2=1.25m → cone half-angle ≈14°
+w_crash:      20.0   # flat crash penalty (contact forces > 1 N)
 w_bypass:     15.0  # one-time penalty for crossing the gate plane outside the opening
 w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
+w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
+
+# ── Progress-based stall termination ──────────────────────────────────────
+# Counter increments every step and resets to 0 when a gate is passed.
+# Fires a large penalty and ends the episode after stall_patience steps without
+# passing any gate — catches hovering, circling, and stuck-in-place behaviour.
+w_stall:        30.0   # penalty magnitude when stall fires
+stall_patience: 200    # steps without a gate before stall fires (~2 s at 100 Hz)
 # ──────────────────────────────────────────────────────────────────────────
 
 # ── Trajectory ────────────────────────────────────────────────────────────

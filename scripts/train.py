@@ -19,7 +19,7 @@ from omegaconf import OmegaConf
 
 from omni_drones import init_simulation_app
 from omni_drones.utils.torchrl import AgentSpec
-from torchrl.data import CompositeSpec
+from torchrl.data.tensor_specs import Composite as CompositeSpec
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from omni_drones.utils.torchrl import SyncDataCollector
 from omni_drones.utils.torchrl.transforms import (
@@ -67,6 +67,7 @@ def main(cfg):
         if ppo_cfg_path.exists():
             logging.info(f"Loading task-specific PPO config: {ppo_cfg_path}")
             task_ppo_cfg = OmegaConf.load(ppo_cfg_path)
+            OmegaConf.set_struct(cfg.algo, False)  # allow task yaml to add new keys
             cfg.algo = OmegaConf.merge(cfg.algo, task_ppo_cfg)
         else:
             logging.warning(f"ppo_cfg '{ppo_cfg_name}' not found at {ppo_cfg_path}, using default.")

@@ -331,8 +331,8 @@ class IsaacEnv(EnvBase):
         self.progress_buf += 1
 
         tensordict = TensorDict({}, self.batch_size, device=self.device)
-        tensordict.update(self._compute_state_and_obs())
         tensordict.update(self._compute_reward_and_done())
+        tensordict.update(self._compute_state_and_obs())
         return tensordict
 
     def _pre_sim_step(self, tensordict: TensorDictBase):

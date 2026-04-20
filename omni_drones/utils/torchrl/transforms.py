@@ -37,9 +37,11 @@ from torchrl.data import (
     TensorSpec,
     Bounded,
     Unbounded,
-    DiscreteTensorSpec,
-    MultiDiscreteTensorSpec,
     Composite,
+)
+from torchrl.data.tensor_specs import (
+    UnboundedDiscrete as DiscreteTensorSpec,
+    MultiCategorical as MultiDiscreteTensorSpec,
 )
 from .env import AgentSpec
 from dataclasses import replace

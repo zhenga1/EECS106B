@@ -131,6 +131,7 @@ class LeePositionController(ControllerBase):
             torch.tensor([inertia["xx"], inertia["yy"], inertia["zz"], 1])
         )
         self.mixer = nn.Parameter(compute_parameters(rotor_config, I))
+        self.register_buffer('I', I[:3, :3])
         self.attitute_gain = nn.Parameter(
             torch.as_tensor(controller_params["attitude_gain"]).float() @ I[:3, :3].inverse()
         )
@@ -221,7 +222,7 @@ class LeePositionController(ControllerBase):
         ang_acc = (
             - ang_error * self.attitute_gain
             - ang_rate_err * self.ang_rate_gain
-            + torch.linalg.cross(ang_vel, ang_vel)
+            + torch.linalg.cross(ang_vel, self.I @ ang_vel)
         )
         # Compute thrust using a blend of current and desired body z-axis
         # This provides a middle ground: uses desired direction for better gravity compensation
@@ -259,6 +260,7 @@ class AttitudeController(ControllerBase):
         )
 
         self.mixer = nn.Parameter(compute_parameters(rotor_config, I))
+        self.register_buffer('I', I[:3, :3])
         self.gain_attitude = nn.Parameter(
             torch.tensor([3., 3., 0.035]) @ I[:3, :3].inverse()
         )
@@ -329,7 +331,7 @@ class AttitudeController(ControllerBase):
         angular_acc = (
             - angle_error * self.gain_attitude
             - angular_rate_error * self.gain_angular_rate
-            + torch.linalg.cross(ang_vel, ang_vel)
+            + torch.linalg.cross(ang_vel, self.I @ ang_vel)
         )
         angular_acc_thrust = torch.cat([angular_acc, target_thrust], dim=1)
         cmd = (self.mixer @ angular_acc_thrust.T).T
@@ -358,9 +360,9 @@ class RateController(ControllerBase):
         )
 
         self.mixer = nn.Parameter(compute_parameters(rotor_config, I))
-        self.I = I[:3, :3]  # Store inertia matrix for gyroscopic term
+        self.register_buffer('I', I[:3, :3])  # inertia matrix; moves with .to(device)
         self.gain_angular_rate = nn.Parameter(
-            torch.tensor([0.52, 0.52, 0.025]) @ self.I.inverse()
+            torch.tensor([0.52, 0.52, 0.025]) @ I[:3, :3].inverse()
         )
 
 
