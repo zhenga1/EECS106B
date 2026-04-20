@@ -1,9 +1,72 @@
+# =============================================================================
+# DroneRace_algo_mpcc.yaml — PPO HYPERPARAMETERS FOR MPCC REWARD TRAINING
+# =============================================================================
+#
+# USAGE: Copy to cfg/algo/DroneRace.yaml, or set ppo_cfg in task YAML
+#        to point to this file.
+#
+# KEY DIFFERENCES FROM STANDARD PPO ALGO:
+#   1. HIGHER entropy in Stage 1: the MPCC reward is dense from step 1 (unlike
+#      sparse gate rewards), so we can afford less entropy and still explore.
+#      But Stage 1 still needs enough entropy to discover good trajectories.
+#   2. LOWER clip_param in Stage 3: the lag error term makes the reward surface
+#      sharper — conservative updates prevent destroying Stage 2 skills.
+#   3. Huber critic loss in all stages: the MPCC reward can have large variance
+#      (a drone that completes the lap gets ~145 vs ~10 for a drone that crashes
+#      immediately). Huber loss limits the impact of outlier returns on critic.
+#
+# SWITCHING STAGES:
+#   Uncomment the block for your current training stage and paste into ACTIVE
+#   SETTINGS. Set checkpoint_path before Stage 2 and Stage 3.
+#
+# =============================================================================
+
 name: ppo
 
-# ---- STUDENT EDIT: PPO training schedule ---------------------------------
-train_every: 32   # <-- EDIT: collect this many env steps before each update
-ppo_epochs: 8     # <-- EDIT: number of gradient epochs per update
-# --------------------------------------------------------------------------
+# =============================================================================
+# STAGE-SPECIFIC SETTINGS — uncomment the matching block and paste below
+# =============================================================================
+
+# --- MPCC STAGE 1 SETTINGS ---
+# Dense reward from step 1 means the value function has real structure to model.
+# Use moderate entropy and standard PPO settings.
+# train_every: 32
+# ppo_epochs: 8
+# num_minibatches: 4
+# clip_param: 0.2
+# entropy_coef: 0.005     # lower than PPO Stage 1 — MPCC dense reward helps exploration
+# gae_lambda: 0.95
+# gamma: 0.99
+# max_grad_norm: 5.0
+
+# --- MPCC STAGE 2 SETTINGS ---
+# Contouring penalty creates a new, precise loss landscape.
+# More gradient steps per batch to learn the spatial structure.
+# train_every: 64
+# ppo_epochs: 8
+# num_minibatches: 5
+# clip_param: 0.2
+# entropy_coef: 0.003
+# gae_lambda: 0.95
+# gamma: 0.99
+# max_grad_norm: 5.0
+
+# --- MPCC STAGE 3 SETTINGS ---
+# Lag penalty + smoothness makes the reward sharper — conservative updates.
+# train_every: 64
+# ppo_epochs: 10
+# num_minibatches: 5
+# clip_param: 0.15         # conservative — protect learned Stage 2 contouring skill
+# entropy_coef: 0.001
+# gae_lambda: 0.95
+# gamma: 0.99
+# max_grad_norm: 3.0
+
+# =============================================================================
+# CURRENTLY ACTIVE SETTINGS — update for each stage
+# =============================================================================
+train_every: 64
+ppo_epochs: 8
 num_minibatches: 5
 clip_param: 0.2
 entropy_coef: 0.003
@@ -11,32 +74,88 @@ gae_lambda: 0.95
 gamma: 0.99
 max_grad_norm: 5.0
 
-# whether to use privileged information
+# =============================================================================
+# CHECKPOINT LOADING
+# =============================================================================
+# Stage 1 → Stage 2: Set to Stage 1 final checkpoint path.
+# Stage 2 → Stage 3: Set to Stage 2 final checkpoint path.
+# Stage 1: Leave empty ("") to train from scratch.
+#
+# Checkpoints saved at: /tmp/wandb/run-<ID>/files/checkpoint_final.pt
+checkpoint_path: ""
+
 priv_actor: false
 priv_critic: false
 
-checkpoint_path:
-
+# =============================================================================
+# NETWORK ARCHITECTURE
+# =============================================================================
 actor:
-  # ---- STUDENT EDIT: actor network --------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
-  hidden_units: [256, 256]  # <-- EDIT: list of hidden layer sizes, e.g. [256, 256, 256]
-  activation: relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
-  # -----------------------------------------------------------------------
+  # Learning rates per stage:
+  # Stage 1: 0.0003  (faster — dense MPCC reward provides clear gradient signal)
+  # Stage 2: 0.0002  (standard)
+  # Stage 3: 0.0001  (fine-tuning — conservative to protect contouring skill)
+  lr: 0.0002
+
+  # Keep [256, 256] across all stages to allow checkpoint loading.
+  # The MPCC reward provides a richer signal than sparse gate rewards,
+  # so the same architecture can model a more complex value function.
+  hidden_units: [256, 256]
+
+  # elu often outperforms relu for continuous control quadrotor tasks
+  # (smoother gradients, better handling of near-zero activations)
+  activation: elu
+
   lr_scheduler:
   lr_scheduler_kwargs:
   layer_norm: true
   weight_decay: 0.0
 
 critic:
-  # ---- STUDENT EDIT: critic network -------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
-  hidden_units: [256, 256]  # <-- EDIT: list of hidden layer sizes
-  activation: relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
-  # -----------------------------------------------------------------------
+  # Critic lr slightly higher than actor — needs to track complex MPCC return structure
+  # Stage 1: 0.0005   Stage 2: 0.0003   Stage 3: 0.0002
+  lr: 0.0003
+
+  hidden_units: [256, 256]
+  activation: elu
+
   lr_scheduler:
   lr_scheduler_kwargs:
   layer_norm: true
   weight_decay: 0.0
-  use_huber_loss: false
-  huber_delta: 10.0
+
+  # Huber loss RECOMMENDED for MPCC training:
+  # The MPCC reward has high return variance (clean lap ~145 vs crash ~-10).
+  # Huber loss limits the impact of outlier returns on the critic update,
+  # preventing the value function from being dominated by the best or worst episodes.
+  use_huber_loss: true
+  huber_delta: 15.0     # higher than standard (10) because MPCC returns are larger
+
+# =============================================================================
+# WANDB MONITORING GUIDE FOR MPCC TRAINING
+# =============================================================================
+# The environment logs 4 MPCC-specific stats. Use these to diagnose training:
+#
+# train/stats.mpcc_contouring_err (e_c, metres, want LOW):
+#   This is the most important MPCC metric. Measures how far the drone drifts
+#   laterally from the piecewise-linear centerline.
+#   < 0.5m : excellent (drone is tightly following the racing line)
+#   0.5-1.5m: acceptable (some drift, needs contouring weight tuning)
+#   > 1.5m : poor (drone is cutting corners; increase mpcc_w_cont)
+#
+# train/stats.mpcc_lag_err (e_l, metres, want LOW):
+#   Measures how far from the next gate the drone is along the segment.
+#   Should START high (drone hasn't learned to progress yet) and DECREASE.
+#   If it stays high despite low contouring_err: increase mpcc_w_lag.
+#
+# train/stats.mpcc_arc_progress (Δlag/step, metres, want HIGH):
+#   Measures arc-length progress per step. Positive when drone moves forward.
+#   < 0.01 m/step : drone is barely moving (increase mpcc_w_prog)
+#   0.03-0.07 m/step: normal racing progress at 3-7 m/s average
+#   > 0.08 m/step : drone is flying very fast (may miss gates if w_cont too low)
+#
+# train/stats.mpcc_speed (m/s, want HIGH but not at cost of gate misses):
+#   Raw drone speed magnitude. Should increase over training.
+#   < 2 m/s : drone is slow (increase mpcc_w_spd or mpcc_w_time)
+#   4-8 m/s : good racing speed for this track
+#   > 10 m/s: very aggressive — check if drone is still passing gates

@@ -1,35 +1,64 @@
+# =============================================================================
+# DroneRace_task_mpcc_stage2.yaml — MPCC STAGE 2: NAVIGATION & CONTOURING
+# =============================================================================
+#
+# GOAL: Teach the drone to stay on the racing line and pass through gates.
+#
+# NEW REWARD TERMS VS STAGE 1:
+#   − e_c² · w_cont      ← CONTOURING ERROR (the core MPCC penalty — penalises
+#                           lateral drift from the piecewise-linear racing line)
+#   + gate_bonus          ← flat bonus for passing through a gate
+#   + centering · w_center← TOGT insight: bonus for passing near gate center
+#   + speed · w_spd       ← rewards maintaining high velocity
+#
+# WHY THE CONTOURING PENALTY IS THE KEY MPCC TERM:
+#   In MPCC theory, the contouring cost q_c · e_c² forces the solver to keep
+#   the vehicle on the racing line. Without it, the drone finds the shortest
+#   path between gates (straight lines that cut corners) rather than the
+#   optimal racing trajectory (which may deviate from straight but enables
+#   higher exit speeds). In RL, this term shapes the policy onto the
+#   piecewise-linear centerline — the simplest representation of the track.
+#
+# DISTRIBUTED INIT: ON — all gates trained simultaneously.
+#   Without this, the drone learns gate 0 but rarely sees gates 1-3.
+#
+# SUCCESS CRITERION:
+#   - train/stats.gates_passed > 3 consistently
+#   - train/stats.mpcc_contouring_err falling (staying closer to centerline)
+#   - train/stats.success > 0 (some lap completions)
+# Typical training time: 80-120M frames from Stage 1 checkpoint.
+#
+# THEN: Switch to DroneRace_task_mpcc_stage3.yaml.
+#
+# =============================================================================
+
 name: DroneRaceEnv
 
 defaults:
-  # see https://hydra.cc/docs/advanced/overriding_packages/
   - /base/env_base@_here_
   - /base/sim_base@_here_
 
-# Task-specific PPO overrides. Points to a file in cfg/algo/ that is merged
-# over the default ppo.yaml when this task is loaded.
 ppo_cfg: DroneRace.yaml
 
+training_stage: 2
+distributed_init: true    # ON for Stage 2 — critical for multi-gate training
+
 env:
-  num_envs: 500            # <-- EDIT: number of parallel environments
-  max_episode_length: 500 # <-- EDIT: max steps per episode before truncation
+  num_envs: 500
+  max_episode_length: 600   # slightly longer — allows full-lap attempts
 
 sim:
-  substeps: 5   # overrides the default of 5
-  dt: 0.002 
-  
+  substeps: 5
+  dt: 0.002
+
 drone_model:
   name: Iris
   controller: RateController
 
-total_frames: 200_000_000
-save_interval: 100 
-# seed: 0
+total_frames: 120_000_000
+save_interval: 100
 
-# Track configuration: config-based track with custom gate positions and orientations
-# Gate's local x axis is perpendicular to surface. Center is on the bottom middle. 
-# IMPORTANT: The last gate should be the exact same pos and yaw as the first gate. 
-
-# Circular track 
+# ------ CIRCULAR TRACK -------------------------------------------------------
 track_config:
   "1":
     pos: [0.0, 0.0, 1.0]
@@ -42,113 +71,58 @@ track_config:
     yaw: -1.57
   "4":
     pos: [5.0, -5.0, 1.0]
-    yaw: 3.14  # pi
+    yaw: 3.14
   "5":
     pos: [0.0, 0.0, 1.0]
     yaw: 1.57
 
-# Figure 8 
-# track_config:
-#   "1":
-#     pos: [0.0, 0.0, 1.0]
-#     yaw: 1.57
-#   "2":
-#     pos: [2.0, 3.0, 1.0]
-#     yaw: 0
-#   "3":
-#     pos: [10.0, -3.0, 1.0]
-#     yaw: 0
-#   "4":
-#     pos: [12.0, 0.0, 1.0]
-#     yaw: 1.57
-#   "5":
-#     pos: [10.0, 3.0, 1.0]
-#     yaw: 3.14
-#   "6":
-#     pos: [2.0, -3.0, 1.0]
-#     yaw: 3.14
-#   "7":
-#     pos: [0.0, 0.0, 1.0]
-#     yaw: 1.57
-
-# Race track
-# track_config:
-#   "1":
-#     pos: [12.5, 2.0, 1.0]
-#     yaw: 3.14
-
-#   "2":
-#     pos: [6.5, 6.0, 1.0]
-#     yaw: 2.36
-
-#   "3":
-#     pos: [5.5, 14.0, 1.0]
-#     yaw: 2.093
-
-#   "4":
-#     pos: [2.5, 24.0, 1.0]
-#     yaw: 1.57
-
-#   "5":
-#     pos: [7.5, 30.0, 1.0]
-#     yaw: 6.11
-
-#   "6":
-#     pos: [12.2, 22.0, 1.0]
-#     yaw: 6.28
-
-#   "7":
-#     pos: [17.5, 30.0, 3.0]
-#     yaw: 7.68
-
-#   "8":
-#     pos: [17.5, 30.0, 1.0]
-#     yaw: 4.54
-
-#   "9":
-#     pos: [18.0, 22.0, 1.0]
-#     yaw: 4.88
-
-#   "10":
-#     pos: [20.5, 14.0, 1.0]
-#     yaw: 4.54
-
-#   "11":
-#     pos: [18.5, 6.0, 3.0]
-#     yaw: 3.92
-
-#   "12":
-#     pos: [18.5, 6.0, 1.0]
-#     yaw: 3.92
-
-#   "13":
-#     pos: [12.5, 2.0, 1.0]
-#     yaw: 3.14
-    
-# Gate settings
 gate_scale: 1.0
-gate_height: 2.5 
-gate_width: 2.5 
+gate_height: 2.5
+gate_width: 2.5
 
-# ── MPCC-style reward hyperparameters ──────────────────────────────────────
-# Converts MPCC's cost J = q_c·e_c² + q_l·e_l² − μ_v·Δθ into an RL reward.
-# Racing line = straight segment from prev gate centre → current gate centre.
-# Drone position is decomposed into lag (along segment) and contouring (⊥).
+bounds_x_min: -5.0
+bounds_x_max: 15.0
+bounds_y_min: -10.0
+bounds_y_max: 10.0
+bounds_z_max: 8.0
+
+# ------ MPCC REWARD SCALES (STAGE 2) -----------------------------------------
 #
-# Sources: MPCC (TRO 2022), MPCC++ (2024), Swift (Nature 2023), MonoRace
-# (2026), MPPI ref-free (2024), Actor-Critic MPC (TRO 2025), TOGT (2023).
+# REWARD BALANCE GUIDE (approximate per successful episode):
+#   r_prog:   ~20 total  (7m/gate × 2.0 × 4 gates ÷ 500 steps rough estimate)
+#   r_cont:  ~-5 total  (small when following centerline: e_c~0.5m, 0.5²×0.3×500)
+#   r_gate:  ~40 total  (gate_bonus × 4 gates)
+#   r_center: ~8 total  (w_center × centering × 4 gates, if centered)
+#   r_spd:   ~20 total  (5 m/s × 0.05 × 500 steps, rough)
+#   r_up:     ~3 total  (0.1 × ~0.9 uprightness × 500 steps)
+#   r_time:   -3 total  (0.005 × 600 steps)
+#   r_crash: -10/episode at start, falling to near 0 as drone improves
+# A clean 4-gate episode should yield ~85-90 total reward.
 
-w_progress:   2.0    # μ_v — reward per metre of forward progress (Δlag) along racing line
-w_contouring: 0.4    # q_c — penalty weight on contouring error² (lateral deviation from line)
-w_lag:        0.05   # q_l — penalty weight on normalised lag error² (pacing, generally small)
-w_gate:       10.0   # one-time bonus for passing through a gate (Swift)
-w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT: gate as spatial volume)
-w_speed:      0.04   # reward for speed magnitude (MonoRace / MPPI)
-w_time:       0.01   # per-step cost to encourage speed (Swift)
-w_crash:      10.0   # penalty applied on crash termination
-w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
-w_completion: 50.0   # large bonus for completing the full lap
-# ──────────────────────────────────────────────────────────────────────────
+# Stage 1: Stability / Progress (reduced from Stage 1 — drone is more stable now)
+mpcc_w_prog:  2.0       # Keep strong — arc-length progress remains primary signal
+mpcc_w_up:    0.1       # Greatly reduced — drone is stable from Stage 1 training
+                        # Set to 0.0 if the drone is still too conservative
+mpcc_w_time:  0.005     # Slightly increased — begin pushing for speed
+mpcc_w_crash: 20.0      # Increased — crashing loses more than gate passage gains
+
+# Stage 2: Navigation / Contouring (ALL NEW in Stage 2)
+mpcc_w_cont:   0.3      # Contouring penalty weight. THE CORE MPCC TERM.
+                        # INCREASE to 0.5 if drone cuts corners and misses gates.
+                        # DECREASE to 0.1 if drone is so cautious it barely moves.
+mpcc_gate_bonus: 10.0   # Flat gate passage reward.
+                        # INCREASE if drone circles gate instead of flying through.
+mpcc_w_center: 3.0      # Gate center quality bonus (from TOGT insight).
+                        # Range: 0.0 at edge → 3.0 at center.
+                        # INCREASE if drone clips gate edges consistently.
+mpcc_w_spd:    0.05     # Speed reward weight.
+                        # INCREASE if drone slows down near gates.
+                        # DECREASE if drone flies so fast it misses gates.
+
+# Stage 3: Full MPCC (DISABLED in Stage 2 — listed for reference)
+mpcc_w_lag:   0.0
+mpcc_w_sm:    0.0
+mpcc_w_lap:   0.0
 
 debug_gate_origins: false
 debug_axis_length: 0.5

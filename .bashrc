@@ -1,5 +1,6 @@
 export EECS106B_DIR="/workspace/omni_drones"
 export ISAACSIM_PATH="/workspace/isaacsim"
+
 source "$ISAACSIM_PATH/setup_conda_env.sh"
 
 cd $EECS106B_DIR
@@ -46,3 +47,5 @@ function eecs106b_install() {
   echo "----------------------------------------"
   echo "re-source your bash using: source ~/.bashrc"
 }
+
+export WANDB_API_KEY="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"

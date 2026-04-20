@@ -40,6 +40,6 @@ wandb:
   tags:
 
 defaults:
-  - task: DroneRace
-  - algo: sac
+  - task: Hover
+  - algo: ppo
   - _self_
