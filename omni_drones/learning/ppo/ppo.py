@@ -50,7 +50,7 @@ class PPOConfig:
     ppo_epochs: int = 4
     num_minibatches: int = 16
     clip_param: float = 0.1
-    entropy_coef: float = 0.001
+    entropy_coef: float = 0.002
     gae_lambda: float = 0.95
     gamma: float = 0.99
     max_grad_norm: float = 5.0

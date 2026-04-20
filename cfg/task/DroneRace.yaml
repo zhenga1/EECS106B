@@ -12,6 +12,7 @@ ppo_cfg: DroneRace.yaml
 env:
   num_envs: 500            # <-- EDIT: number of parallel environments
   max_episode_length: 500 # <-- EDIT: max steps per episode before truncation
+  # we can try 1000 max episode length if we find that 500 is too short
 
 sim:
   substeps: 5   # overrides the default of 5

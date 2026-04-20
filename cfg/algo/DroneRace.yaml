@@ -1,15 +1,12 @@
 name: ppo
 
 # ---- STUDENT EDIT: PPO training schedule ---------------------------------
-train_every: 256   # collect this many env steps before each update
+train_every: 32   # collect this many env steps before each update
 ppo_epochs: 4      # gradient epochs per update
 # --------------------------------------------------------------------------
-num_minibatches: 8  # increased from 5 → larger minibatches, more stable gradient estimates
+num_minibatches: 5
 clip_param: 0.2
-entropy_coef: 0.01          # starting value (high for early exploration)
-entropy_coef_end: 0.00005   # final value after annealing
-entropy_anneal_steps: 4000  # ~half of a 1B-frame run (500 envs, train_every=256 → ~7800 total calls)
-entropy_warmup_T0: 0        # 0 = plain cosine decay; set e.g. 1000 for SGDR warm restarts
+entropy_coef: 0.003
 gae_lambda: 0.95
 gamma: 0.99
 max_grad_norm: 5.0
@@ -18,13 +15,13 @@ max_grad_norm: 5.0
 priv_actor: false
 priv_critic: false
 
-# checkpoint_path: remove this to specify it with a different method
+checkpoint_path:
 
 actor:
   # ---- STUDENT EDIT: actor network --------------------------------------
-  lr: 0.0001                # <-- EDIT: learning rate
+  lr: 0.0002                # <-- EDIT: learning rate
   hidden_units: [256, 256, 256]  # <-- EDIT: list of hidden layer sizes, e.g. [256, 256, 256]
-  activation: leaky_relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
+  activation: relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
   lr_scheduler:
   lr_scheduler_kwargs:
@@ -33,9 +30,9 @@ actor:
 
 critic:
   # ---- STUDENT EDIT: critic network -------------------------------------
-  lr: 0.0003                # <-- EDIT: learning rate
+  lr: 0.0002                # <-- EDIT: learning rate
   hidden_units: [256, 256, 256]  # <-- EDIT: list of hidden layer sizes
-  activation: leaky_relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
+  activation: relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
   lr_scheduler:
   lr_scheduler_kwargs:

@@ -16,25 +16,25 @@ priv_critic: false
 checkpoint_path:
 
 actor:
-  lr: 0.0001
+  lr: 0.0005
   lr_scheduler:
   lr_scheduler_kwargs:
 
   # mlp
   hidden_units: [128, 128, 128]
-  activation: leaky_relu  # relu, leaky_relu, elu, gelu, tanh, silu
+  activation: relu  # relu, leaky_relu, elu, gelu, tanh, silu
   layer_norm: true
 
   weight_decay: 0.0
 
 critic:
-  lr: 0.0001
+  lr: 0.0005
   lr_scheduler:
   lr_scheduler_kwargs:
 
   # mlp
   hidden_units: [128, 128, 128]
-  activation: leaky_relu  # relu, leaky_relu, elu, gelu, tanh, silu
+  activation: relu  # relu, leaky_relu, elu, gelu, tanh, silu
   layer_norm: true
 
   weight_decay: 0.0

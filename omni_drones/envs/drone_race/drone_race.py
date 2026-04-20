@@ -319,6 +319,7 @@ class DroneRaceEnv(IsaacEnv):
         self.prev_distance_to_gate = torch.zeros(self.num_envs, device=self.device)
         self.prev_lag = torch.zeros(self.num_envs, device=self.device)
         self.stall_counter = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.start_gate_indices = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
         # Gate crossing detection: drone position in gate frame from previous step
         self.gate_width = cfg.task.get("gate_width", 1.0)
@@ -595,8 +596,12 @@ class DroneRaceEnv(IsaacEnv):
     def _reset_idx(self, env_ids: torch.Tensor):
         self.drone._reset_idx(env_ids)
 
+        # Pick a random spawn gate per env (exclude last gate — lap-closure duplicate of gate 0)
+        spawn_gate_idx = torch.randint(0, self.num_gates - 1, (len(env_ids),), device=self.device)
+        self.start_gate_indices[env_ids] = spawn_gate_idx
+        self.gate_indices[env_ids] = spawn_gate_idx
+
         # Reset gate progress
-        self.gate_indices[env_ids] = 0
         self.gate_passed[env_ids] = False
         self.gate_bypassed[env_ids] = False
         self.track_completed[env_ids] = False
@@ -631,43 +636,34 @@ class DroneRaceEnv(IsaacEnv):
             )  # (N, num_gates, 3), (N, num_gates, 4)
             gate_env_pos = gate_env_pos[env_ids]  # (len(env_ids), num_gates, 3)
             gate_env_rot = gate_env_rot[env_ids]  # (len(env_ids), num_gates, 4)
-            first_gate_pos = gate_env_pos[:, 0]  # (N, 3)
-            first_gate_rot = gate_env_rot[:, 0]  # (N, 4)
 
-            # Calculate offset in gate's local frame (behind the gate)
-            # Gate's local x-axis points in the forward direction
+            # Gather the randomly chosen spawn gate pose per env
+            local_ids = torch.arange(len(env_ids), device=self.device)
+            spawn_gate_pos = gate_env_pos[local_ids, spawn_gate_idx]  # (M, 3)
+            spawn_gate_rot = gate_env_rot[local_ids, spawn_gate_idx]  # (M, 4)
 
-            # Rotate offset to world frame using gate's orientation
-            # Expand offset_local to match batch size
-            offset_local_expanded = self.offset_local.unsqueeze(0).expand(
-                len(env_ids), -1
-            )  # (N, 3)
-            offset_world = quat_rotate(
-                first_gate_rot, offset_local_expanded
-            )  # (len(env_ids), 3)
-
-            # drone_start_pos = first_gate_pos + offset_world 
-            # [KY, Claude] Enable position randomisation so 500 parallel envs have diverse
-            # starting states, reducing gradient correlation across the batch.
+            # Place drone 1.5 m behind the spawn gate (gate local -x) + small random perturbation
+            offset_local_expanded = self.offset_local.unsqueeze(0).expand(len(env_ids), -1)  # (M, 3)
+            offset_world = quat_rotate(spawn_gate_rot, offset_local_expanded)  # (M, 3)
             pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
-            drone_start_pos = first_gate_pos + offset_world + pos_perturbation  # (len(env_ids), 3)
+            drone_start_pos = spawn_gate_pos + offset_world + pos_perturbation  # (M, 3)
 
-            # Compute first_gate_center here (needed for prev_lag init and used again below).
+            # Compute spawn gate center (origin is bottom-center; add height/2 in gate-local z)
             _gc_offset = torch.tensor([0.0, 0.0, self.gate_height / 2.0], device=self.device)
-            _gc_offset_world = quat_rotate(
-                first_gate_rot, _gc_offset.unsqueeze(0).expand(len(env_ids), -1)
-            )
-            first_gate_center = first_gate_pos + _gc_offset_world  # (M, 3)
+            _gc_offset_world = quat_rotate(spawn_gate_rot, _gc_offset.unsqueeze(0).expand(len(env_ids), -1))
+            spawn_gate_center = spawn_gate_pos + _gc_offset_world  # (M, 3)
 
-            # [KY, Claude] Initialize prev_lag using the gate-0 forward direction as tangent.
-            # At reset, gate_indices == 0 so the line segment is degenerate (start == end);
-            # fall back to the gate's local x-axis (forward normal) as the tangent instead.
+            # Initialize prev_lag using spawn gate's forward axis as tangent
             gate_forward_reset = quat_rotate(
-                first_gate_rot,
+                spawn_gate_rot,
                 torch.tensor([1.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(len(env_ids), -1),
             )  # (M, 3)
-            drone_to_gate_0 = drone_start_pos - first_gate_center  # (M, 3) env frame
-            self.prev_lag[env_ids] = (drone_to_gate_0 * gate_forward_reset).sum(dim=-1).detach()
+            drone_to_spawn_gate = drone_start_pos - spawn_gate_center  # (M, 3)
+            self.prev_lag[env_ids] = (drone_to_spawn_gate * gate_forward_reset).sum(dim=-1).detach()
+
+            # Aliases for the code below that uses these names
+            first_gate_center = spawn_gate_center
+            first_gate_rot = spawn_gate_rot
 
             drone_start_pos_with_agent = drone_start_pos.unsqueeze(
                 1
@@ -1352,21 +1348,7 @@ class DroneRaceEnv(IsaacEnv):
         self.last_action = current_action.detach()
 
         # ----- END STUDENT CODE -----
-
-        # --- Debug prints for env0 ---
-        if self.progress_buf[0] % 100 == 0:  # Print every 100 steps for env0
-            print(f"[DEBUG env0] step={self.progress_buf[0].item():4d} | "
-                  f"lag={lag[0].item():.3f} | "
-                  f"contouring={contouring_err[0].item():.3f} | "
-                  f"delta_lag={delta_lag[0].item():.3f} | "
-                  f"total_reward={reward[0].item():.3f} | "
-                  f"progress={progress_reward[0].item():.3f} | "
-                  f"contouring_penalty={contouring_penalty[0].item():.3f} | "
-                  f"gate_bonus={gate_bonus[0].item():.3f} | "
-                  f"crash_penalty={crash_penalty[0].item():.3f} | "
-                  f"stall_ctr={self.stall_counter[0].item()} | "
-                  f"speed={speed[0].item():.2f}")
-
+        
         # -----------------------------------------------------------------------
         # Crash / termination condition — computed above (before the reward)
         # so that crash_penalty is included on the terminal transition.
@@ -1384,9 +1366,10 @@ class DroneRaceEnv(IsaacEnv):
         self.stats["success"].bitwise_or_(completed_task.unsqueeze(-1))
         self.stats["return"].add_(reward.unsqueeze(-1))
         self.stats["episode_len"][:] = self.progress_buf.unsqueeze(1)
+        gates_since_spawn = (self.gate_indices - self.start_gate_indices).clamp(min=0)
         self.stats["gates_passed"][:] = (
-            (self.gate_indices + self.track_completed.long()).float().unsqueeze(1)
-        )
+            gates_since_spawn + self.track_completed.long() * (self.num_gates - 1 - self.start_gate_indices)
+        ).float().unsqueeze(1)
         # (optional) add extra stat tracking lines here if you add new metrics
         self.stats["drone_uprightness"][:] = drone_up[:, 2].unsqueeze(1).detach()
 
