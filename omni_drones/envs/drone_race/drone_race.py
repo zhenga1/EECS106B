@@ -42,7 +42,7 @@ from omni_drones.utils.torch import (
 )
 from omni_drones.envs.isaac_env import AgentSpec, IsaacEnv
 from omni_drones.robots.drone import MultirotorBase
-from omni_drones.views import ArticulationView, RigidPrimView
+from omni_drones.views import ArticulationView, RigidPrimView, XFormPrimView
 
 from omni_drones.robots import ASSET_PATH
 
@@ -224,18 +224,17 @@ class DroneRaceEnv(IsaacEnv):
 
         print(f"[DroneRaceEnv] num_envs={self.num_envs}, num_gates={self.num_gates}")
 
-        # Initialize gates view here — must come before any self.gates.get_world_poses() call.
+        # Initialize gates view here — must come before any self._get_gate_world_poses() call.
+        # Gates are static (triangle mesh), so use XFormPrimView instead of RigidPrimView.
         try:
             print(
-                f"[DroneRaceEnv] Creating RigidPrimView with pattern='/World/envs/env_*/Gate_*', shape=[{self.num_envs}, {self.num_gates}]"
+                f"[DroneRaceEnv] Creating XFormPrimView with pattern='/World/envs/env_*/Gate_*', shape=[{self.num_envs}, {self.num_gates}]"
             )
-            self.gates = RigidPrimView(
+            self.gates = XFormPrimView(
                 "/World/envs/env_*/Gate_*",
                 reset_xform_properties=False,
-                shape=[self.num_envs, self.num_gates],
-                track_contact_forces=False,
             )
-            print(f"[DroneRaceEnv] RigidPrimView created, calling initialize()...")
+            print(f"[DroneRaceEnv] XFormPrimView created, calling initialize()...")
             self.gates.initialize()
             print(f"[DroneRaceEnv] gates.initialize() completed")
         except Exception as e:
@@ -256,7 +255,7 @@ class DroneRaceEnv(IsaacEnv):
             raise
 
         # [KY] Build gate centers in env frame for line-segment MPCC decomposition.
-        gate_world_pos, gate_world_rot = self.gates.get_world_poses()
+        gate_world_pos, gate_world_rot = self._get_gate_world_poses()
         gate_env_pos, gate_env_rot = self.get_env_poses(
             (gate_world_pos, gate_world_rot)
         )
@@ -524,12 +523,25 @@ class DroneRaceEnv(IsaacEnv):
 
         return ["/World/defaultGroundPlane"]
 
+    def _get_gate_world_poses(self):
+        pos, rot = self.gates.get_world_poses()
+        return (
+            pos.reshape(self.num_envs, self.num_gates, 3),
+            rot.reshape(self.num_envs, self.num_gates, 4),
+        )
+
     def _set_specs(self):
+        print(f"[_set_specs DEBUG] Loading from: {__file__}")
         # Custom robot state: linear_vel(3) + rotation_matrix_flat(9) + angular_vel(3) = 18
         robot_state_dim = 3 + 9 + 3  # 15
         # Observation: robot_state(15) + next_gate_rpos_local(3) + next_to_next_gate_pos(3)
         #              + next_gate_rot_mat_2col(6)
         observation_dim = robot_state_dim + 3 + 3 + 6
+        print(f"[_set_specs DEBUG] observation_dim = {observation_dim}")
+        print("The observation vector consists of:")
+        print(f"  - Robot state: {robot_state_dim}")
+        print(f"  - Next gate relative position: 3")
+        print(f"  - Next to next gate position: 3")
         self.observation_spec = (
             Composite(
                 {
@@ -610,15 +622,6 @@ class DroneRaceEnv(IsaacEnv):
         self.stall_counter[env_ids] = 0
         # [KY, Claude] prev_lag is initialized below after drone_start_pos is known; zero-init caused a spurious -3.0 reward spike on the first step of every episode
 
-        # Reset gate velocities to prevent drift (gates are static, so we just zero velocities)
-        # Set velocities to zero for all gates in reset environments
-        num_gates_to_reset = len(env_ids) * self.num_gates
-        gate_velocities = torch.zeros(num_gates_to_reset, 6, device=self.device)
-
-        # Reshape to match gate view shape: (num_envs, num_gates, 6)
-        gate_velocities = gate_velocities.reshape(len(env_ids), self.num_gates, 6)
-        self.gates.set_velocities(gate_velocities, env_indices=env_ids)
-
         # Reset drone position and orientation
         drone_rpy = self.init_rpy_dist.sample((*env_ids.shape, 1))
         drone_rot = euler_to_quaternion(drone_rpy)
@@ -628,7 +631,7 @@ class DroneRaceEnv(IsaacEnv):
             # Get gate positions from views - get all gates first, then select the ones we need
             # This avoids the unflatten issue when using env_indices
             gate_world_pos, gate_world_rot = (
-                self.gates.get_world_poses()
+                self._get_gate_world_poses()
             )  # (num_envs, num_gates, 3), (num_envs, num_gates, 4)
             # Select only the environments we're resetting
             gate_env_pos, gate_env_rot = self.get_env_poses(
@@ -843,7 +846,7 @@ class DroneRaceEnv(IsaacEnv):
             # Get gate positions from views (similar to fly_through.py)
             # gates.get_world_poses() returns (pos, rot) with shape (num_envs, num_gates, ...)
             gate_world_pos, gate_world_rot = (
-                self.gates.get_world_poses()
+                self._get_gate_world_poses()
             )  # (N, num_gates, 3), (N, num_gates, 4)
         except Exception as e:
             print("=" * 80)
@@ -1085,7 +1088,7 @@ class DroneRaceEnv(IsaacEnv):
             drone_pos = self.drone.pos  # (N, 1, 3), env frame
             drone_rot = self.drone.rot  # (N, 1, 4), quaternion
 
-            gate_world_pos, gate_world_rot = self.gates.get_world_poses()
+            gate_world_pos, gate_world_rot = self._get_gate_world_poses()
             gate_env_pos, gate_env_rot = self.get_env_poses(
                 (gate_world_pos, gate_world_rot)
             )

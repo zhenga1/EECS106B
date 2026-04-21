@@ -59,6 +59,26 @@ def main(cfg):
     print(OmegaConf.to_yaml(cfg))
 
     from omni_drones.envs.isaac_env import IsaacEnv
+    import pdb
+    pdb.set_trace()
+
+        # ---- CUSTOM ENV OVERRIDE ------------------------------------------------
+    import importlib.util as _ilu
+    _custom_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../omni_drones/envs/drone_race/drone_race.py")
+    if os.path.exists(_custom_path):
+        # Remove the existing registration so our custom class can re-register
+        # under the same name without hitting the duplicate-name guard in
+        # IsaacEnv.__init_subclass__
+        if "DroneRaceEnv" in IsaacEnv.REGISTRY:
+            del IsaacEnv.REGISTRY["DroneRaceEnv"]
+        _spec = _ilu.spec_from_file_location("custom_drone_race", _custom_path)
+        _mod  = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        print(f"[play] Loaded custom env from {_custom_path}")
+    else:
+        print(f"[play] WARNING: drone_race.py not found at {_custom_path}, using default")
+    # -------------------------------------------------------------------------
+
 
     env_class = IsaacEnv.REGISTRY[cfg.task.name]
     base_env = env_class(cfg, headless=cfg.headless)
