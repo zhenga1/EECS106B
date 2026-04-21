@@ -82,7 +82,7 @@ max_grad_norm: 5.0
 # Stage 1: Leave empty ("") to train from scratch.
 #
 # Checkpoints saved at: /tmp/wandb/run-<ID>/files/checkpoint_final.pt
-checkpoint_path: ""
+checkpoint_path:
 
 priv_actor: false
 priv_critic: false
