@@ -178,6 +178,9 @@ class DroneRaceEnv(IsaacEnv):
         self.progress_k = cfg.task.get(
             "progress_k", 5
         )  # steps to accumulate for MPCC reward
+        self.w_stall_step = cfg.task.get(
+            "w_stall_step", 0.1
+        )  # per-step stall penalty leading up to stall firing
         # Legacy aliases so the crash section and other code still works
         self.reward_crash_scale = self.w_crash
         # ----- END STUDENT CODE -----
@@ -1291,7 +1294,7 @@ class DroneRaceEnv(IsaacEnv):
         speed_bonus = speed * self.w_speed  # (N,)
 
         # 2g. Time penalty  (Swift: small per-step cost)
-        time_penalty = -self.w_time  # scalar
+        time_penalty = -self.w_time * self.w_stall_step # scalar
 
         # 2h. Action smoothness penalty  (Swift r_cmd)
         current_action = self.drone.get_joint_velocities()
@@ -1328,9 +1331,10 @@ class DroneRaceEnv(IsaacEnv):
 
         # 2l. Upright bonus: reward keeping the drone's z-axis pointing up.
         drone_up = quat_axis(drone_rot.squeeze(1), axis=2)  # (N, 3) body z-axis in world frame
-        upright_bonus = drone_up[:, 2].clamp(min=0.0) * self.w_upright  # (N,)
+        upright_bonus = drone_up[:, 2] * self.w_upright  # (N,) — negative when inverted, positive when upright
 
         # 2n. Crash penalty — flat penalty on any collision.
+        crashed = (collision_forces.squeeze(1).norm(dim=-1) > 1.0)
         crash_penalty = -crashed.float() * self.w_crash  # (N,)
 
         # 2o. Progress-based stall — counter increments every step, resets on gate passage.
@@ -1370,7 +1374,8 @@ class DroneRaceEnv(IsaacEnv):
         self.prev_distance_to_gate = torch.norm(
             drone_pos_flat - new_gate_center, dim=-1
         ).detach()
-        self.prev_lag = lag.detach()  # always update; gate transition step delta is zeroed above
+        # Zero prev_lag on gate transitions: avoids cross-frame subtraction at step t+1.
+        self.prev_lag = torch.where(gate_index_changed, torch.zeros_like(lag), lag).detach()
         self.last_action = current_action.detach()
 
         # ----- END STUDENT CODE -----

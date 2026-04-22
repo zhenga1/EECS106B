@@ -55,6 +55,30 @@
 | `ConfigKeyError: entropy_coef_end` | `OmegaConf.set_struct(cfg.algo, False)` before merge in train.py |
 | `ang_vel × ang_vel = 0` (gyroscopic term) | Changed to `torch.linalg.cross(ang_vel, I @ ang_vel)` |
 
+### 8. Restored upright bonus (2026-04-22)
+- `upright_bonus` was commented out and `drone_up` was never computed, giving zero gradient to stabilise orientation
+- Fixed: `drone_up = quat_axis(drone_rot.squeeze(1), axis=2)`, `upright_bonus = drone_up[:, 2].clamp(min=0) * w_upright`, added to reward sum
+- Effect: `drone_uprightness` stat was ~0.34 (tumbling); fixed to climb toward 1.0
+
+### 9. Fixed inverted approach reward (2026-04-22)
+- `approach_reward` used `squared_progress = d_current² − d_previous²`, which is **negative** when approaching → drone was rewarded for flying away from gates
+- Fixed: `approach_reward = (self.prev_distance_to_gate - distance_to_gate) * w_approach`
+- Effect: `gates_passed` went from 0.0 to ~0.5
+
+### 10. Simplified progress reward block (2026-04-22)
+- Removed unused `squared_progress` accumulation buffer (`recent_squared_progress`, `prev_drone_pos_flat`) from the per-step computation path
+- `approach_reward` is now a single line; `recent_squared_progress` buffer kept in `__init__` for potential reuse
+
+### 11. Added flipped_crash termination (2026-04-22)
+- `crashed` only checked contact forces; an inverted drone in mid-air accumulated approach reward while falling
+- Added `flipped_crash = drone_up[:, 2] < 0.0` and `crashed = contact_crash | flipped_crash`
+- Provides immediate crash penalty and episode reset when drone inverts
+
+### 12. Fixed lag frame-jump bug after gate transitions (2026-04-22)
+- On gate transition at step t: `prev_lag` was set to lag in the OLD segment (large value)
+- At step t+1: lag computed in the NEW segment (small value near 0) → `delta_lag` large negative → `progress_reward` strongly penalised the step right after passing a gate
+- Fixed: on `gate_index_changed` steps, `prev_lag` is seeded with the drone's lag in the NEW segment's frame so that step t+1's delta is meaningful
+
 ---
 
 ## Training Results (epoch 16, ~2M frames)

@@ -187,6 +187,7 @@ w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
 # passing any gate — catches hovering, circling, and stuck-in-place behaviour.
 w_stall:        15.0  # penalty magnitude when stall fires (must dwarf bootstrap rewards)
 stall_patience: 800   # steps = 8 s sim time; max inter-gate dist ~10m needs ~500+ steps at 2 m/s
+w_stall_step:   0.02  # per-step stall penalty (must be small enough to allow some hovering)
 # ──────────────────────────────────────────────────────────────────────────
 
 # ── Trajectory ────────────────────────────────────────────────────────────
