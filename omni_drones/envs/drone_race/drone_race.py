@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 
-import imp
 import torch
 import torch.distributions as D
 from tensordict.tensordict import TensorDict, TensorDictBase
@@ -1143,7 +1142,6 @@ class DroneRaceEnv(IsaacEnv):
             gate_env_rot = self._gate_env_rot_cache
 
             # Print debug positions in the same frame (env frame) for easier sanity checks.
-            gate_idx0 = int(self.gate_indices[0].item())
             # print(f"Drone position (env frame): {torch.round(drone_pos[0, 0] * 100) / 100}")
             if self.debug_gate_origins:
                 gate_world_pos, gate_world_rot = self._get_gate_world_poses()
@@ -1179,7 +1177,7 @@ class DroneRaceEnv(IsaacEnv):
             gate_passed_this_step,
             gate_index_changed,
             new_gate_center,
-            gate_bypassed_this_step,
+            _gate_bypassed_this_step,
         ) = self._detect_gate_crossings(
             drone_pos_flat,
             current_gate_center,
@@ -1215,7 +1213,6 @@ class DroneRaceEnv(IsaacEnv):
         # -----------------------------------------------------------------------
         # ----- ADD YOUR REWARD CODE BELOW (replace the placeholder) -----
         #
-        drone_up = quat_axis(drone_rot.squeeze(1), axis=2)  # (N, 3)
         collision_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
         crashed = collision_forces.squeeze(1).norm(dim=-1) > 1.0  # (N,)
 
@@ -1273,24 +1270,14 @@ class DroneRaceEnv(IsaacEnv):
         contouring_vec = drone_to_start - lag.unsqueeze(-1) * path_tangent  # (N, 3)
         contouring_err = torch.norm(contouring_vec, dim=-1)  # (N,)
 
-        # [KY, GPT4.1] Squared distance progress, Credit: https://arxiv.org/pdf/2509.14726
-        p_kp1 = drone_pos_flat  # (N, 3) current position
-        p_gate = current_gate_center  # (N, 3) current gate center
-        p_k = getattr(
-            self, "prev_drone_pos_flat", None
-        )  # (N, 3) previous drone positio
-        if p_k is None:
-            # On first step, use current position for both
-            p_k = p_kp1.clone()
+        prev_drone_pos_flat = self.prev_drone_pos_flat
+        if prev_drone_pos_flat is None:
+            prev_drone_pos_flat = drone_pos_flat
 
-        # Compute squared progress: ||p_kp1 - p_gate||^2 - ||p_k - p_gate||^2
-        # (N,) positive if approaching gate
-        squared_progress = torch.norm(p_kp1 - p_gate, dim=-1).pow(2) - torch.norm(
-            p_k - p_gate, dim=-1
+        squared_progress = torch.norm(drone_pos_flat - current_gate_center, dim=-1).pow(2) - torch.norm(
+            prev_drone_pos_flat - current_gate_center, dim=-1
         ).pow(2)
-        self.prev_drone_pos_flat = (
-            p_kp1.detach()
-        )  # Store current position for next step
+        self.prev_drone_pos_flat = drone_pos_flat.detach()
 
         # Accumulate the k most recent between-gate progress values
         # Shift and insert new progress
@@ -1323,21 +1310,6 @@ class DroneRaceEnv(IsaacEnv):
 
         # 2d. Gate passage bonus  (Swift / MonoRace)
         gate_bonus = gate_passed_this_step.float() * self.w_gate  # (N,)
-
-        # 2e. Gate centering bonus  (TOGT insight: reward crossing near centre)
-        #     At the moment of gate passage, measure how centred the drone was
-        #     in the gate's y-z plane using prev_drone_in_gate_frame.
-        #     Max bonus when perfectly centred, decays to 0 at gate edge.
-        gate_yz_dist = torch.norm(
-            self.prev_drone_in_gate_frame[..., 1:3], dim=-1  # (N,)
-        )
-        gate_half_diag = 0.5 * (self.gate_width**2 + self.gate_height**2) ** 0.5
-        centering_score = torch.clamp(
-            1.0 - gate_yz_dist / gate_half_diag, min=0.0
-        )  # (N,) ∈ [0, 1]
-        centering_bonus = (
-            gate_passed_this_step.float() * centering_score * self.w_centering
-        )  # (N,)
 
         # 2f. Speed bonus  (MonoRace / MPPI: encourage fast flight)
         drone_vel_body = self.drone.vel[..., :3].squeeze(1)  # (N, 3)
@@ -1386,12 +1358,6 @@ class DroneRaceEnv(IsaacEnv):
         #     drone_up[:, 2] ∈ [-1, 1]; clamp to [0, 1] — only reward upright.
         # upright_bonus = drone_up[:, 2].clamp(min=0.0) * self.w_upright  # (N,)
 
-        # 2m. Altitude bonus: exponential reward for flying near the current gate's height.
-        #     Guides the drone to fly at gate altitude, not crawl along the ground.
-        target_z = current_gate_center[:, 2]  # (N,)
-        altitude_err = torch.abs(drone_pos_flat[:, 2] - target_z)  # (N,)
-        altitude_bonus = torch.exp(-altitude_err) * self.w_altitude  # (N,)
-
         # 2n. Crash penalty — flat penalty on any collision.
         crash_penalty = -crashed.float() * self.w_crash  # (N,)
 
@@ -1409,28 +1375,18 @@ class DroneRaceEnv(IsaacEnv):
 
         # ── 3. Total reward ──────────────────────────────────────────────
         reward = (
-            # upright_bonus           # keep level (bootstrap)
-            # + altitude_bonus        # fly at gate height (bootstrap)
-            # + approach_reward       # move toward current gate (bootstrap)
-            +progress_reward  # MPCC μ_v·Δθ  — primary racing driver
+              progress_reward  # primary racing driver
             + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
             + gate_bonus  # one-time bonus for passing a gate
-            # + centering_bonus       # bonus for centred gate crossing
             + speed_bonus  # reward fast flight
-            # + time_penalty          # per-step urgency cost
             + smooth_penalty  # action smoothness
             + angular_rate_penalty  # discourage spinning
             + crash_penalty  # penalise crashes
             + stall_penalty  # penalise hovering / flying too low too long
-            # + bypass_penalty        # penalise flying around a gate
             + completion_bonus  # full-lap bonus
         )  # (N,)
 
         # ── 4. Update state for next step ────────────────────────────────
-        # On gate-index change, reset lag to 0 (start of new segment)
-        self.prev_lag = torch.where(
-            gate_index_changed, torch.zeros_like(lag), lag
-        ).detach()
         self.prev_distance_to_gate = torch.norm(
             drone_pos_flat - new_gate_center, dim=-1
         ).detach()
@@ -1442,7 +1398,7 @@ class DroneRaceEnv(IsaacEnv):
         # Crash / termination condition — computed above (before the reward)
         # so that crash_penalty is included on the terminal transition.
         # Components: ground_crash | bounds_crash | flipped_crash | contact_crash
-        # Variables drone_up, ground_crash, bounds_crash, flipped_crash,
+        # Variables ground_crash, bounds_crash, flipped_crash,
         # contact_crash, and crashed are all already defined above.
         # -----------------------------------------------------------------------
         truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
@@ -1471,7 +1427,9 @@ class DroneRaceEnv(IsaacEnv):
             .unsqueeze(1)
         )
         # (optional) add extra stat tracking lines here if you add new metrics
-        self.stats["drone_uprightness"][:] = drone_up[:, 2].unsqueeze(1).detach()
+        self.stats["drone_uprightness"][:] = (
+            quat_axis(drone_rot.squeeze(1), axis=2)[:, 2].unsqueeze(1).detach()
+        )
 
         return TensorDict(
             {
