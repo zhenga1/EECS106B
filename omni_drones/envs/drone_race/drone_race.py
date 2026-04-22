@@ -306,6 +306,11 @@ class DroneRaceEnv(IsaacEnv):
         # Store gate centers for gate-to-gate line-segment MPCC decomposition.
         # Gates are static so this is valid for the whole training run.
         self.gate_env_centers = gate_env_centers  # (num_envs, num_gates, 3)
+        # Cache env-frame gate poses so _compute_state_and_obs and
+        # _compute_reward_and_done never call the expensive Isaac Sim
+        # XFormPrimView.get_world_poses() at runtime (gates never move).
+        self._gate_env_pos_cache = gate_env_pos  # (num_envs, num_gates, 3)
+        self._gate_env_rot_cache = gate_env_rot  # (num_envs, num_gates, 4)
         print(
             f"[DroneRaceEnv] using gate-to-gate line segments for MPCC decomposition."
         )
@@ -349,6 +354,10 @@ class DroneRaceEnv(IsaacEnv):
         self.effort = torch.zeros(
             self.num_envs, 1, self.drone.action_spec.shape[-1], device=self.device
         )
+        self.recent_squared_progress = torch.zeros(
+            self.num_envs, self.progress_k, device=self.device
+        )
+        self.prev_drone_pos_flat = None
 
         self.init_vels = torch.zeros_like(self.drone.get_velocities())
         self.init_joint_pos = self.drone.get_joint_positions(True)
@@ -884,11 +893,6 @@ class DroneRaceEnv(IsaacEnv):
             drone_pos = self.drone.pos  # (N, 1, 3) refreshed by _build_robot_state
             drone_rot = self.drone.rot  # (N, 1, 4) refreshed by _build_robot_state
 
-            # Get gate positions from views (similar to fly_through.py)
-            # gates.get_world_poses() returns (pos, rot) with shape (num_envs, num_gates, ...)
-            gate_world_pos, gate_world_rot = (
-                self._get_gate_world_poses()
-            )  # (N, num_gates, 3), (N, num_gates, 4)
         except Exception as e:
             print("=" * 80)
             print(
@@ -908,9 +912,8 @@ class DroneRaceEnv(IsaacEnv):
                 f"DroneRaceEnv._compute_state_and_obs failed (num_envs={self.num_envs}, num_gates={self.num_gates})"
             ) from e
 
-        gate_env_pos, gate_env_rot = self.get_env_poses(
-            (gate_world_pos, gate_world_rot)
-        )  # (N, num_gates, 3), (N, num_gates, 4)
+        gate_env_pos = self._gate_env_pos_cache  # (N, num_gates, 3) — static, cached at init
+        gate_env_rot = self._gate_env_rot_cache  # (N, num_gates, 4)
 
         # If track is completed, target first gate for landing
         track_completed = self.track_completed  # (N,)
@@ -1136,15 +1139,14 @@ class DroneRaceEnv(IsaacEnv):
             drone_pos = self.drone.pos  # (N, 1, 3), env frame
             drone_rot = self.drone.rot  # (N, 1, 4), quaternion
 
-            gate_world_pos, gate_world_rot = self._get_gate_world_poses()
-            gate_env_pos, gate_env_rot = self.get_env_poses(
-                (gate_world_pos, gate_world_rot)
-            )
+            gate_env_pos = self._gate_env_pos_cache  # static, cached at init
+            gate_env_rot = self._gate_env_rot_cache
 
             # Print debug positions in the same frame (env frame) for easier sanity checks.
             gate_idx0 = int(self.gate_indices[0].item())
             # print(f"Drone position (env frame): {torch.round(drone_pos[0, 0] * 100) / 100}")
             if self.debug_gate_origins:
+                gate_world_pos, gate_world_rot = self._get_gate_world_poses()
                 self.debug_draw.clear()
                 self._draw_gate_origins(gate_world_pos, gate_world_rot)
                 self._draw_global_trajectory()
@@ -1291,13 +1293,6 @@ class DroneRaceEnv(IsaacEnv):
         )  # Store current position for next step
 
         # Accumulate the k most recent between-gate progress values
-        if (
-            not hasattr(self, "recent_squared_progress")
-            or self.recent_squared_progress.shape[1] != self.progress_k
-        ):
-            self.recent_squared_progress = torch.zeros(
-                self.num_envs, self.progress_k, device=self.device
-            )
         # Shift and insert new progress
         self.recent_squared_progress = torch.roll(
             self.recent_squared_progress, shifts=-1, dims=1

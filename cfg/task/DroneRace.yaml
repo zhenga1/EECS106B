@@ -11,7 +11,7 @@ ppo_cfg: DroneRace.yaml
 
 env:
   num_envs: 500            # <-- EDIT: number of parallel environments
-  max_episode_length: 500 # <-- EDIT: max steps per episode before truncation
+  max_episode_length: 1000 # <-- EDIT: max steps per episode before truncation
   # we can try 1000 max episode length if we find that 500 is too short
 
 sim:
@@ -99,9 +99,9 @@ track_config:
     yaw: 6.28
 
   # one of da s gates
-  # "7":
-  #   pos: [17.5, 30.0, 3.0]
-  #   yaw: 7.68
+  "7":
+    pos: [17.5, 30.0, 3.0]
+    yaw: 7.68
 
   "8":
     pos: [17.5, 30.0, 1.0]
@@ -116,9 +116,9 @@ track_config:
     yaw: 4.54
 
   # another one of da s gates
-  # "11":
-  #   pos: [18.5, 6.0, 3.0]
-  #   yaw: 3.92
+  "11":
+    pos: [18.5, 6.0, 3.0]
+    yaw: 3.92
 
   "12":
     pos: [18.5, 6.0, 1.0]
@@ -152,7 +152,6 @@ w_altitude:   2.0    # exp(-|z - gate_z|) bonus for flying at gate height
 # ── Approach / progress rewards ────────────────────────────────────────────
 w_approach:   2.0    # reward per metre of approach to gate (dense bootstrap signal)
 w_progress:   2.0    # μ_v — reward per metre of forward progress (Δlag) along racing line
-progress_k: 5        # [KY, GPT4.1] number of recent progress values to accumulate: https://arxiv.org/pdf/2509.14726
 
 # ── Contouring / lag penalties ─────────────────────────────────────────────
 # Reduced from 0.4 → 0.1: drone must learn to fly first; strong contouring
@@ -164,7 +163,7 @@ w_contouring: 0.1    # q_c — penalty weight on contouring error² (lateral dev
 # ── Gate / completion bonuses ──────────────────────────────────────────────
 w_gate:       50.0   # one-time bonus for passing through a gate (Swift)
 w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT)
-w_completion: 100.0   # large bonus for completing the full lap
+w_completion: 500.0   # large bonus for completing the full lap
 
 # ── Speed / time rewards ───────────────────────────────────────────────────
 # Increased w_speed 0.04 → 0.15 and w_time 0.01 → 0.05:
@@ -179,8 +178,7 @@ w_time:       0.05   # per-step cost to encourage speed (Swift)
 w_crash:      20.0   # flat crash penalty (contact forces > 1 N)
 w_bypass:     15.0  # one-time penalty for crossing the gate plane outside the opening
 w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
-w_ang_rate:   0.015  # penalty on angular rate² (discourages spinning/tumbling)
-w_yaw_rate:   0.005
+w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
 
 # ── Progress-based stall termination ──────────────────────────────────────
 # Counter increments every step and resets to 0 when a gate is passed.
