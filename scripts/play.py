@@ -59,8 +59,6 @@ def main(cfg):
     print(OmegaConf.to_yaml(cfg))
 
     from omni_drones.envs.isaac_env import IsaacEnv
-    import pdb
-    pdb.set_trace()
 
         # ---- CUSTOM ENV OVERRIDE ------------------------------------------------
     import importlib.util as _ilu

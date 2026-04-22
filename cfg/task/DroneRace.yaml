@@ -11,7 +11,7 @@ ppo_cfg: DroneRace.yaml
 
 env:
   num_envs: 500            # <-- EDIT: number of parallel environments
-  max_episode_length: 1000 # <-- EDIT: max steps per episode before truncation
+  max_episode_length: 3000 # <-- EDIT: max steps per episode before truncation
   # we can try 1000 max episode length if we find that 500 is too short
 
 sim:
@@ -145,37 +145,38 @@ gate_width: 2.5
 # Without these, an untrained policy outputs near-zero thrust → drone falls
 # → all episodes identical → return variance ≈ 0 → explained_var = -∞.
 # w_alive pruned (covered by crash_penalty + stall termination)
-w_upright:    1.0    # bonus for drone z-axis pointing up (prevents tumbling)
-w_altitude:   2.0    # exp(-|z - gate_z|) bonus for flying at gate height
+w_upright:    0.2    # bonus for drone z-axis pointing up (prevents tumbling)
+w_altitude:   0.5    # exp(-|z - gate_z|) bonus for flying at gate height
 # w_vel_up pruned (redundant with altitude_bonus)
 
 # ── Approach / progress rewards ────────────────────────────────────────────
-w_approach:   2.0    # reward per metre of approach to gate (dense bootstrap signal)
-w_progress:   2.0    # μ_v — reward per metre of forward progress (Δlag) along racing line
+w_approach:   1.0    # backup Euclidean approach signal (progress_reward is the main driver)
+w_progress:  8.0    # μ_v — reward per metre of forward progress (Δlag) along racing line
+progress_k:   3
 
 # ── Contouring / lag penalties ─────────────────────────────────────────────
 # Reduced from 0.4 → 0.1: drone must learn to fly first; strong contouring
 # penalty during early training just produces large negative rewards that swamp
 # the sparse gate bonuses and discourage exploration.
-w_contouring: 0.1    # q_c — penalty weight on contouring error² (lateral deviation)
+w_contouring: 0.2    # q_c — penalty weight on contouring error² (lateral deviation)
 # w_lag pruned (redundant with progress_reward + contouring_penalty)
 
 # ── Gate / completion bonuses ──────────────────────────────────────────────
-w_gate:       50.0   # one-time bonus for passing through a gate (Swift)
+w_gate:       10.0   # one-time bonus for passing through a gate (Swift)
 w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT)
-w_completion: 500.0   # large bonus for completing the full lap
+w_completion: 50.0   # large bonus for completing the full lap
 
 # ── Speed / time rewards ───────────────────────────────────────────────────
 # Increased w_speed 0.04 → 0.15 and w_time 0.01 → 0.05:
 # these create a "go fast or get penalised" gradient that prevents the policy
 # from learning to hover indefinitely to collect alive_bonus.
 w_speed:      0.15   # reward for speed magnitude (MonoRace / MPPI)
-w_time:       0.05   # per-step cost to encourage speed (Swift)
+w_time:       0.30   # per-step cost to encourage speed (Swift) — must make hovering lose money
 
 # ── Crash / smoothness ─────────────────────────────────────────────────────
 # Increased w_crash 10 → 20: crash_penalty is now actually applied (it was
 # defined but unused in the reward sum — now fixed in drone_race.py).
-w_crash:      20.0   # flat crash penalty (contact forces > 1 N)
+w_crash:      15.0  # flat crash penalty (contact forces > 1 N) — must hurt a lot
 w_bypass:     15.0  # one-time penalty for crossing the gate plane outside the opening
 w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
 w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
@@ -184,8 +185,8 @@ w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
 # Counter increments every step and resets to 0 when a gate is passed.
 # Fires a large penalty and ends the episode after stall_patience steps without
 # passing any gate — catches hovering, circling, and stuck-in-place behaviour.
-w_stall:        30.0   # penalty magnitude when stall fires
-stall_patience: 200    # steps without a gate before stall fires (~2 s at 100 Hz)
+w_stall:        15.0  # penalty magnitude when stall fires (must dwarf bootstrap rewards)
+stall_patience: 800   # steps = 8 s sim time; max inter-gate dist ~10m needs ~500+ steps at 2 m/s
 # ──────────────────────────────────────────────────────────────────────────
 
 # ── Trajectory ────────────────────────────────────────────────────────────
