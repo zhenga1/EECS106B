@@ -1364,13 +1364,12 @@ class DroneRaceEnv(IsaacEnv):
         # 2i. Angular rate penalty — discourage spinning out of control.
         # drone.vel[..., 3:6] is angular velocity in body frame (rad/s).
         ang_vel_body = self.drone.vel[..., 3:6].squeeze(1)  # (N, 3)
-        ang_rate = torch.norm(ang_vel_body, dim=-1)  # (N,) rad/s
-        # angular_rate_penalty = -ang_rate.pow(2) * self.w_ang_rate  # (N,)
+        roll_rate = ang_vel_body[..., 0]  # (N,)
+        pitch_rate = ang_vel_body[..., 1]  # (N,)
+        yaw_rate = ang_vel_body[..., 2]  # (N,)
         angular_rate_penalty = -self.w_ang_rate * (
-            roll.pow(2) + pitch.pow(2)
-        ) - self.w_yaw_rate * yaw.pow(
-            2
-        )  # (N,)
+            roll_rate.pow(2) + pitch_rate.pow(2)
+        ) - self.w_yaw_rate * yaw_rate.pow(2)  # (N,)
 
         # 2j. Lap completion bonus
         completion_bonus = self.track_completed.float() * self.w_completion  # (N,)
