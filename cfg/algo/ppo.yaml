@@ -21,8 +21,9 @@ actor:
   lr_scheduler_kwargs:
 
   # mlp
-  hidden_units: [128, 128, 128]
-  activation: relu  # relu, leaky_relu, elu, gelu, tanh, silu
+  # changing to elu and 4 layers following https://arxiv.org/pdf/2512.11781
+  hidden_units: [512, 256, 128]
+  activation: elu  # relu, leaky_relu, elu, gelu, tanh, silu
   layer_norm: true
 
   weight_decay: 0.0
@@ -33,9 +34,9 @@ critic:
   lr_scheduler_kwargs:
 
   # mlp
-  hidden_units: [128, 128, 128]
-  activation: relu  # relu, leaky_relu, elu, gelu, tanh, silu
-  layer_norm: true
+  hidden_units: [512, 256, 128, 128]
+  activation: elu  # relu, leaky_relu, elu, gelu, tanh, silu
+  layer_norm: truez
 
   weight_decay: 0.0
   use_huber_loss: false

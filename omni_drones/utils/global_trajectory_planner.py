@@ -24,7 +24,7 @@ def compute_global_trajectory(
 
     Supported methods
     -----------------
-    "catmull_rom" (recommended)
+    "catmull_rom"
         Arc-length-parameterised cubic Hermite interpolating spline built with
         scipy.CubicSpline.  **Passes through every gate centre exactly.**
         Endpoint tangents are set from gate_normals so the drone enters/exits
@@ -33,13 +33,7 @@ def compute_global_trajectory(
     "linear"
         Piecewise-linear interpolation.  Correct (passes through all gates)
         but produces sharp corners at each gate.
-
-    "spline"  (legacy — has a known bug)
-        Approximate B-spline.  The endpoint-tangent Hermite patch overwrites
-        ctps[1] and ctps[-2] with tangent-direction guide points, causing the
-        trajectory to SKIP the second and second-to-last gates.  Kept for
-        backward compatibility; prefer "catmull_rom" for new runs.
-
+        
     Returns:
         trajectory: (num_points, 3) tensor of waypoints.
     """
@@ -92,37 +86,16 @@ def compute_global_trajectory(
         traj_np = cs(t_samples).astype(np.float32)              # (num_points, 3)
         trajectory = torch.from_numpy(traj_np).to(gate_positions.device)
 
-    elif method == "spline":
-        # Legacy approximate B-spline — kept for backward compatibility.
-        # WARNING: overwrites ctps[1] and ctps[-2] with tangent guide points,
-        # causing the trajectory to skip gate 2 and gate N-1.
-        n_ctps = n_gates
-        ctps = gate_positions.clone()
-        k_eff = min(int(k), n_ctps - 1)
-
-        if n_ctps >= 4:
-            ctps[1] = ctps[0] + tangent_scale * gate_normals[0]
-            ctps[-2] = ctps[-1] - tangent_scale * gate_normals[-1]
-
-        knots = get_knots(n_ctps=n_ctps, k=k_eff, device=gate_positions.device)
-        t_vals = torch.linspace(
-            knots[k_eff],
-            knots[-k_eff - 1],
-            int(num_points),
-            device=gate_positions.device,
-            dtype=gate_positions.dtype,
-        )
-        trajectory = splev_torch(t_vals, knots, ctps, k_eff)
     else:
         raise ValueError(f"Unknown trajectory method '{method}'. "
-                         f"Choose from: 'catmull_rom', 'linear', 'spline'.")
+                         f"Choose from: 'catmull_rom', 'linear'.")
     return trajectory
 
 
 def generate_trajectory_from_gate_poses(
     gate_positions,
     gate_orientations,
-    method="spline",
+    method="catmull_rom",
     num_points=200,
     tangent_scale=1.0,
     k=3,
@@ -132,7 +105,7 @@ def generate_trajectory_from_gate_poses(
     Args:
         gate_positions: (N_gates, 3) tensor of gate center positions.
         gate_orientations: (N_gates, 4) tensor of gate orientations (quaternions, wxyz).
-        method: "linear" or "spline".
+        method: "linear" or "catmull_rom".
         num_points: Number of points in the trajectory.
         tangent_scale: Scaling factor for tangent magnitude at endpoints.
         k: Degree of B-spline (ignored if method is "linear").
