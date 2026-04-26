@@ -11,7 +11,7 @@ ppo_cfg: DroneRace.yaml
 
 env:
   num_envs: 500            # <-- EDIT: number of parallel environments
-  max_episode_length: 3000 # <-- EDIT: max steps per episode before truncation
+  max_episode_length: 5000 # <-- EDIT: max steps per episode before truncation
   # we can try 1000 max episode length if we find that 500 is too short
 
 sim:
@@ -162,7 +162,7 @@ w_contouring: 0.2    # q_c — penalty weight on contouring error² (lateral dev
 # w_lag pruned (redundant with progress_reward + contouring_penalty)
 
 # ── Gate / completion bonuses ──────────────────────────────────────────────
-w_gate:       10.0   # one-time bonus for passing through a gate (Swift)
+w_gate:       5.0   # one-time bonus for passing through a gate (Swift)
 w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT)
 w_completion: 50.0   # large bonus for completing the full lap
 
@@ -176,7 +176,7 @@ w_time:       0.30   # per-step cost to encourage speed (Swift) — must make ho
 # ── Crash / smoothness ─────────────────────────────────────────────────────
 # Increased w_crash 10 → 20: crash_penalty is now actually applied (it was
 # defined but unused in the reward sum — now fixed in drone_race.py).
-w_crash:      15.0  # flat crash penalty (contact forces > 1 N) — must hurt a lot
+w_crash:      10.0  # flat crash penalty (contact forces > 1 N) — must hurt a lot
 w_bypass:     15.0  # one-time penalty for crossing the gate plane outside the opening
 w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
 w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
