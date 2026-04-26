@@ -1252,6 +1252,8 @@ class DroneRaceEnv(IsaacEnv):
         approach_reward = (self.prev_distance_to_gate - distance_to_gate) * self.w_approach  # (N,)
         approach_reward = torch.where(gate_index_changed, torch.zeros_like(approach_reward), approach_reward)
 
+        gate_proximity = torch.exp(-distance_to_gate / 2.0) * 0.5  # (N,) peaks at 0.5 right at gate
+
         # ── 2k–n. Basic flight bootstrap rewards ─────────────────────────
         # Without these, an untrained policy falls to the ground in ~50 steps,
         # all episodes get identical returns, return variance → 0, and
@@ -1306,6 +1308,7 @@ class DroneRaceEnv(IsaacEnv):
             # + bypass_penalty        # penalise flying around a gate
             # + completion_bonus      # full-lap bonus
             + time_penalty          # per-step urgency cost
+            + gate_proximity
         )  # (N,)
 
         # ── 4. Update state for next step ────────────────────────────────

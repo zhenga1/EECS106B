@@ -4,7 +4,7 @@ train_every: 32
 ppo_epochs: 10
 num_minibatches: 5
 clip_param: 0.2
-entropy_coef: 0.001
+entropy_coef: 0.01
 gae_lambda: 0.95
 gamma: 0.99
 max_grad_norm: 5.0
