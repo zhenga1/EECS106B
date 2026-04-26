@@ -646,7 +646,11 @@ class DroneRaceEnv(IsaacEnv):
     def _reset_idx(self, env_ids: torch.Tensor):
         self.drone._reset_idx(env_ids)
 
-        spawn_gate_idx = torch.zeros(len(env_ids), dtype=torch.long, device=self.device)
+        # [CK] Randomise spawn gate: pick any gate except the last (which duplicates gate 0).
+        # Excludes num_gates-1 so the drone never spawns at the finish/start overlap gate.
+        spawn_gate_idx = torch.randint(
+            0, self.num_gates - 1, (len(env_ids),), dtype=torch.long, device=self.device
+        )
         self.start_gate_indices[env_ids] = spawn_gate_idx
         self.gate_indices[env_ids] = spawn_gate_idx
 
@@ -659,37 +663,23 @@ class DroneRaceEnv(IsaacEnv):
         self.stall_counter[env_ids] = 0
         # [KY, Claude] prev_lag is initialized below after drone_start_pos is known; zero-init caused a spurious -3.0 reward spike on the first step of every episode
 
-        # Reset drone position and orientation
-        drone_rpy = self.init_rpy_dist.sample((*env_ids.shape, 1))
-        drone_rot = euler_to_quaternion(drone_rpy)
         try:
-
-            # Position drone near the first gate
-            # Get gate positions from views - get all gates first, then select the ones we need
-            # This avoids the unflatten issue when using env_indices
-            # gate_world_pos, gate_world_rot = (self._get_gate_world_poses())  # (num_envs, num_gates, 3), (num_envs, num_gates, 4)
-            # Select only the environments we're resetting
-            # gate_env_pos, gate_env_rot = self.get_env_poses((gate_world_pos, gate_world_rot))  # (N, num_gates, 3), (N, num_gates, 4)
-            # gate_env_pos = gate_env_pos[env_ids]  # (len(env_ids), num_gates, 3)
-            # gate_env_rot = gate_env_rot[env_ids]  # (len(env_ids), num_gates, 4)
-            # Replace the _get_gate_world_poses() block with:
-            gate_env_pos = self._gate_env_pos_cache[env_ids]   # (M, num_gates, 3) — static, already cached
+            # Use cached static gate poses (gates never move).
+            gate_env_pos = self._gate_env_pos_cache[env_ids]   # (M, num_gates, 3)
             gate_env_rot = self._gate_env_rot_cache[env_ids]   # (M, num_gates, 4)
 
-
-            # Gather the randomly chosen spawn gate pose per env
             local_ids = torch.arange(len(env_ids), device=self.device)
             spawn_gate_pos = gate_env_pos[local_ids, spawn_gate_idx]  # (M, 3)
             spawn_gate_rot = gate_env_rot[local_ids, spawn_gate_idx]  # (M, 4)
 
-            # Place drone 1.5 m behind gate 0 (gate local -x)
+            # Place drone 1.5 m in front of the spawn gate (gate local -x = approach side).
             offset_local_expanded = self.offset_local.unsqueeze(0).expand(
                 len(env_ids), -1
             )  # (M, 3)
             offset_world = quat_rotate(spawn_gate_rot, offset_local_expanded)  # (M, 3)
             drone_start_pos = spawn_gate_pos + offset_world  # (M, 3)
 
-            # Compute spawn gate center (origin is bottom-center; add height/2 in gate-local z)
+            # Compute spawn gate center (origin is bottom-center; add height/2 in gate-local z).
             _gc_offset = torch.tensor(
                 [0.0, 0.0, self.gate_height / 2.0], device=self.device
             )
@@ -698,7 +688,18 @@ class DroneRaceEnv(IsaacEnv):
             )
             spawn_gate_center = spawn_gate_pos + _gc_offset_world  # (M, 3)
 
-            # Initialize prev_lag using spawn gate's forward axis as tangent
+            # [CK] Point drone toward the spawn gate center so it gets a strong reward
+            # signal from step 1. Compute yaw = atan2(dy, dx) from drone to gate center.
+            to_gate = spawn_gate_center - drone_start_pos  # (M, 3)
+            spawn_yaw = torch.atan2(to_gate[:, 1], to_gate[:, 0])  # (M,)
+
+            # Sample small random roll/pitch perturbation for naturalness, use computed yaw.
+            drone_rpy_noise = self.init_rpy_dist.sample((*env_ids.shape, 1))  # (M, 1, 3)
+            drone_rpy = drone_rpy_noise.clone()
+            drone_rpy[:, 0, 2] = spawn_yaw  # override yaw channel
+            drone_rot = euler_to_quaternion(drone_rpy)
+
+            # Initialize prev_lag using spawn gate's forward axis as tangent.
             gate_forward_reset = quat_rotate(
                 spawn_gate_rot,
                 torch.tensor([1.0, 0.0, 0.0], device=self.device)
@@ -710,16 +711,12 @@ class DroneRaceEnv(IsaacEnv):
                 (drone_to_spawn_gate * gate_forward_reset).sum(dim=-1).detach()
             )
 
-            # Aliases for the code below that uses these names
+            # Aliases for the code below that uses these names.
             first_gate_center = spawn_gate_center
             first_gate_rot = spawn_gate_rot
 
-            drone_start_pos_with_agent = drone_start_pos.unsqueeze(
-                1
-            )  # (len(env_ids), 1, 3)
-            env_positions_with_agent = self.envs_positions[env_ids].unsqueeze(
-                1
-            )  # (len(env_ids), 1, 3)
+            drone_start_pos_with_agent = drone_start_pos.unsqueeze(1)  # (M, 1, 3)
+            env_positions_with_agent = self.envs_positions[env_ids].unsqueeze(1)  # (M, 1, 3)
 
             self.drone.set_world_poses(
                 drone_start_pos_with_agent + env_positions_with_agent,
