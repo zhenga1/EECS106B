@@ -1165,13 +1165,13 @@ class DroneRaceEnv(IsaacEnv):
         # lag_err removed: was only used by lag_penalty, which is now pruned
 
         # ── 2. Reward terms ──────────────────────────────────────────────
-        # 2a. Progress reward  (MPCC's μ_v·Δθ)
-        progress_reward = torch.sign(delta_lag) * delta_lag.pow(2) * self.w_progress  # (N,)
+        # 2a. Progress reward  (MPCC's μ_v·Δθ) — linear delta_lag is the standard form.
+        progress_reward = delta_lag * self.w_progress  # (N,)
 
         # 2b. Contouring penalty  (MPCC's q_c·e_c²)
-        # contouring_vec = drone_to_start - lag.unsqueeze(-1) * path_tangent  # (N, 3)
-        # contouring_err = torch.norm(contouring_vec, dim=-1)  # (N,)
-        # contouring_penalty = -contouring_err.pow(2) * self.w_contouring  # (N,)
+        contouring_vec = drone_to_start - lag.unsqueeze(-1) * path_tangent  # (N, 3)
+        contouring_err = torch.norm(contouring_vec, dim=-1)  # (N,)
+        contouring_penalty = -contouring_err.pow(2) * self.w_contouring  # (N,)
 
         # 2d. Gate passage bonus  (Swift / MonoRace)
         gate_bonus = gate_passed_this_step.float() * self.w_gate  # (N,)
@@ -1180,26 +1180,26 @@ class DroneRaceEnv(IsaacEnv):
         #     At the moment of gate passage, measure how centred the drone was
         #     in the gate's y-z plane using prev_drone_in_gate_frame.
         #     Max bonus when perfectly centred, decays to 0 at gate edge.
-        gate_yz_dist = torch.norm(
-            self.prev_drone_in_gate_frame[..., 1:3], dim=-1  # (N,)
-        )
-        gate_half_diag = 0.5 * (self.gate_width**2 + self.gate_height**2) ** 0.5
-        centering_score = torch.clamp(
-            1.0 - gate_yz_dist / gate_half_diag, min=0.0
-        )  # (N,) ∈ [0, 1]
-        centering_bonus = (
-            gate_passed_this_step.float() * centering_score * self.w_centering
-        )  # (N,)
+        # gate_yz_dist = torch.norm(
+        #     self.prev_drone_in_gate_frame[..., 1:3], dim=-1  # (N,)
+        # )
+        # gate_half_diag = 0.5 * (self.gate_width**2 + self.gate_height**2) ** 0.5
+        # centering_score = torch.clamp(
+        #     1.0 - gate_yz_dist / gate_half_diag, min=0.0
+        # )  # (N,) ∈ [0, 1]
+        # centering_bonus = (
+        #     gate_passed_this_step.float() * centering_score * self.w_centering
+        # )  # (N,)
 
         # 2f. Speed bonus  (MonoRace / MPPI: encourage fast flight)
-        drone_vel_body = self.drone.vel[..., :3].squeeze(1)  # (N, 3)
-        drone_rot_flat = drone_rot.squeeze(1)  # (N, 4)
-        drone_vel_env = quat_rotate(drone_rot_flat, drone_vel_body)  # (N, 3)
-        speed = torch.norm(drone_vel_env, dim=-1)  # (N,)
-        speed_bonus = speed * self.w_speed  # (N,)
+        # drone_vel_body = self.drone.vel[..., :3].squeeze(1)  # (N, 3)
+        # drone_rot_flat = drone_rot.squeeze(1)  # (N, 4)
+        # drone_vel_env = quat_rotate(drone_rot_flat, drone_vel_body)  # (N, 3)
+        # speed = torch.norm(drone_vel_env, dim=-1)  # (N,)
+        # speed_bonus = speed * self.w_speed  # (N,)
 
         # 2g. Time penalty  (Swift: small per-step cost)
-        time_penalty = -self.w_time * self.w_stall_step # scalar
+        time_penalty = -self.w_time  # scalar
 
         # 2h. Action smoothness penalty  (Swift r_cmd)
         current_action = self.drone.get_joint_velocities()
@@ -1252,14 +1252,19 @@ class DroneRaceEnv(IsaacEnv):
         crash_penalty = -crashed.float() * self.w_crash  # (N,)
 
         # 2o. Progress-based stall — counter increments every step, resets on gate passage.
-        # Fires a large penalty and terminates when stall_patience steps pass without a gate.
+        # Terminates when stall_patience steps pass without a gate.
+        # Penalty grows linearly with the counter so the value function can predict it
+        # from observation patterns rather than needing to track an unobservable clock.
+        # A spike at exactly step N (original design) can't be predicted from observations
+        # alone and is the primary source of large negative explained-variance spikes.
         self.stall_counter = torch.where(
             gate_passed_this_step,
             torch.zeros_like(self.stall_counter),
             self.stall_counter + 1,
         )
         stall_triggered = self.stall_counter >= self.stall_patience  # (N,)
-        stall_penalty = -stall_triggered.float() * self.w_stall      # (N,)
+        stall_frac = (self.stall_counter.float() / self.stall_patience).clamp(0.0, 1.0)
+        stall_penalty = -stall_frac * self.w_stall_step  # (N,) grows 0 → -w_stall_step
 
 
         # ── 3. Total reward ──────────────────────────────────────────────
@@ -1267,19 +1272,18 @@ class DroneRaceEnv(IsaacEnv):
             upright_bonus           # keep level (bootstrap)
             + altitude_bonus        # fly at gate height (bootstrap)
             + approach_reward       # move toward current gate (bootstrap)
-            # + progress_reward       # MPCC μ_v·Δθ  — primary racing driver
-            # + contouring_penalty    # MPCC q_c·e_c² — stay on racing line
+            + progress_reward       # MPCC μ_v·Δθ  — primary racing driver
+            + contouring_penalty    # MPCC q_c·e_c² — stay on racing line
             + gate_bonus            # one-time bonus for passing a gate
             # + centering_bonus       # bonus for centred gate crossing
             # + speed_bonus           # reward fast flight
-            # + time_penalty          # per-step urgency cost
             + smooth_penalty        # action smoothness
             + angular_rate_penalty  # discourage spinning
             + crash_penalty         # penalise crashes
-            + stall_penalty         # penalise hovering / flying too low too long
+            + stall_penalty         # grows linearly as drone stalls without gate progress
             # + bypass_penalty        # penalise flying around a gate
             + completion_bonus      # full-lap bonus
-            + time_penalty
+            + time_penalty          # per-step urgency cost
         )  # (N,)
 
         # ── 4. Update state for next step ────────────────────────────────
