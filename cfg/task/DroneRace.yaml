@@ -11,7 +11,7 @@ ppo_cfg: DroneRace.yaml
 
 env:
   num_envs: 500            # <-- EDIT: number of parallel environments
-  max_episode_length: 500 # <-- EDIT: max steps per episode before truncation
+  max_episode_length: 1000 # <-- EDIT: max steps per episode before truncation
   # we can try 1000 max episode length if we find that 500 is too short
 
 sim:
@@ -99,9 +99,9 @@ track_config:
     yaw: 6.28
 
   # one of da s gates
-  # "7":
-  #   pos: [17.5, 30.0, 3.0]
-  #   yaw: 7.68
+  "7":
+    pos: [17.5, 30.0, 3.0]
+    yaw: 7.68
 
   "8":
     pos: [17.5, 30.0, 1.0]
@@ -116,9 +116,9 @@ track_config:
     yaw: 4.54
 
   # another one of da s gates
-  # "11":
-  #   pos: [18.5, 6.0, 3.0]
-  #   yaw: 3.92
+  "11":
+    pos: [18.5, 6.0, 3.0]
+    yaw: 3.92
 
   "12":
     pos: [18.5, 6.0, 1.0]
@@ -161,9 +161,9 @@ w_contouring: 0.1    # q_c — penalty weight on contouring error² (lateral dev
 # w_lag pruned (redundant with progress_reward + contouring_penalty)
 
 # ── Gate / completion bonuses ──────────────────────────────────────────────
-w_gate:       50.0   # one-time bonus for passing through a gate (Swift)
+w_gate:       10.0   # one-time bonus for passing through a gate (Swift)
 w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT)
-w_completion: 500.0   # large bonus for completing the full lap
+w_completion: 100.0  # large bonus for completing the full lap
 
 # ── Speed / time rewards ───────────────────────────────────────────────────
 # Increased w_speed 0.04 → 0.15 and w_time 0.01 → 0.05:
@@ -184,8 +184,9 @@ w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
 # Counter increments every step and resets to 0 when a gate is passed.
 # Fires a large penalty and ends the episode after stall_patience steps without
 # passing any gate — catches hovering, circling, and stuck-in-place behaviour.
-w_stall:        30.0   # penalty magnitude when stall fires
+w_stall:        5.0   # penalty magnitude when stall fires
 stall_patience: 200    # steps without a gate before stall fires (~2 s at 100 Hz)
+w_stall_step:   0.1    # per-step stall penalty leading up to stall firing (creates "go fast or get penalised" gradient)
 # ──────────────────────────────────────────────────────────────────────────
 
 # ── Trajectory ────────────────────────────────────────────────────────────

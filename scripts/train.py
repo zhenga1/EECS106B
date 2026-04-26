@@ -126,8 +126,6 @@ def main(cfg):
         _spec = _ilu.spec_from_file_location("custom_drone_race", _custom_path)
         _mod  = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
-        import pdb
-        pdb.set_trace()
         print(f"[train] Loaded custom env from {_custom_path}")
     else:
         print(f"[train] WARNING: drone_race.py not found at {_custom_path}, using default")
