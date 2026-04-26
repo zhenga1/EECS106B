@@ -1,8 +1,8 @@
 name: ppo
 
 # ---- STUDENT EDIT: PPO training schedule ---------------------------------
-train_every: 32   # <-- EDIT: collect this many env steps before each update
-ppo_epochs: 8     # <-- EDIT: number of gradient epochs per update
+train_every: 64  # collect this many env steps before each update
+ppo_epochs: 4      # gradient epochs per update
 # --------------------------------------------------------------------------
 num_minibatches: 5
 clip_param: 0.2

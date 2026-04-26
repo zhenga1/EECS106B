@@ -93,16 +93,26 @@ class DroneRaceEnv(IsaacEnv):
         # Each line reads one value from cfg/task/DroneRace.yaml.
         # The second argument to .get() is the default used if the key is absent.
         # Add matching entries in cfg/task/DroneRace.yaml for each one you add.
-        #
-        # Example:
-        #   self.reward_progress_scale = cfg.task.get("reward_progress_scale", 1.0)
-        #   self.reward_gate_passage   = cfg.task.get("reward_gate_passage", 10.0)
-        #   self.reward_crash_scale    = cfg.task.get("reward_crash_scale", 5.0)
         # -----------------------------------------------------------------------
         # ----- ADD YOUR REWARD CONFIG LINES BELOW (replace / extend the example) -----
-
-        self.reward_example = cfg.task.get("reward_example", 0.5)
-
+        self.w_progress = cfg.task.get("w_progress", 2.0)
+        self.w_contouring = cfg.task.get("w_contouring", 0.4)  
+        self.w_gate = cfg.task.get("w_gate", 10.0)
+        self.w_centering = cfg.task.get("w_centering", 3.0)  
+        self.w_speed = cfg.task.get("w_speed", 0.04)
+        self.w_time = cfg.task.get("w_time", 0.01) 
+        self.w_crash = cfg.task.get("w_crash", 10.0)          
+        self.w_bypass = cfg.task.get("w_bypass", 15.0)       
+        self.w_smooth = cfg.task.get("w_smooth", 0.001)
+        self.w_completion = cfg.task.get("w_completion", 50.0) 
+        self.w_approach = cfg.task.get("w_approach", 2.0)  # [KY, Claude] bootstrap signal: reward per metre of approach toward current gate
+        self.w_upright   = cfg.task.get("w_upright", 1.0)   # bonus for keeping z-axis pointing up
+        self.w_altitude  = cfg.task.get("w_altitude", 0.5)  # exp bonus for flying at gate height
+        self.w_ang_rate        = cfg.task.get("w_ang_rate", 0.005)
+        self.w_stall        = cfg.task.get("w_stall", 30.0)             # one-time penalty when stall fires
+        self.stall_patience = int(cfg.task.get("stall_patience", 200))  # steps without a gate before stall fires
+        # Legacy aliases so the crash section and other code still works
+        self.reward_crash_scale = self.w_crash
         # ----- END STUDENT CODE -----
 
         self.gate_scale = cfg.task.gate_scale
@@ -428,13 +438,22 @@ class DroneRaceEnv(IsaacEnv):
 
     def _reset_idx(self, env_ids: torch.Tensor):
         self.drone._reset_idx(env_ids)
-        
+
+        # --- STUDENT CODE START (1/3): Reset gate progress and spawn position ---
+        # Pick a random spawn gate per env (exclude last gate — lap-closure duplicate of gate 0)
+        spawn_gate_idx = torch.randint(0, self.num_gates - 1, (len(env_ids),), device=self.device)
+        self.start_gate_indices[env_ids] = spawn_gate_idx
+        self.gate_indices[env_ids] = spawn_gate_idx
+        # --- STUDENT CODE END (1/3) ---
+
+        # --- STUDENT CODE START (2/3): Reset gate progress tracking ---
         # Reset gate progress
-        self.gate_indices[env_ids] = 0
         self.gate_passed[env_ids] = False
+        self.gate_bypassed[env_ids] = False
         self.track_completed[env_ids] = False
         self.last_action[env_ids] = 0.0
-        self.effort[env_ids] = 0.0 # Adding this line changes the result
+        self.effort[env_ids] = 0.0
+        self.stall_counter[env_ids] = 0
 
         # Reset gate velocities to prevent drift (gates are static, so we just zero velocities)
         # Set velocities to zero for all gates in reset environments
@@ -444,42 +463,55 @@ class DroneRaceEnv(IsaacEnv):
         # Reshape to match gate view shape: (num_envs, num_gates, 6)
         gate_velocities = gate_velocities.reshape(len(env_ids), self.num_gates, 6)
         self.gates.set_velocities(gate_velocities, env_indices=env_ids)
+        # --- STUDENT CODE END (2/3) ---
 
-        # Reset drone position and orientation
-        drone_rpy = self.init_rpy_dist.sample((*env_ids.shape, 1))
-        drone_rot = euler_to_quaternion(drone_rpy)
+        # --- STUDENT CODE START (3/3): Position drone at spawn gate ---
         try:
-        
-            # Position drone near the first gate
-            # Get gate positions from views - get all gates first, then select the ones we need
-            # This avoids the unflatten issue when using env_indices
-            gate_world_pos, gate_world_rot = self.gates.get_world_poses()  # (num_envs, num_gates, 3), (num_envs, num_gates, 4)
-            # Select only the environments we're resetting
-            gate_env_pos, gate_env_rot = self.get_env_poses((gate_world_pos, gate_world_rot))  # (N, num_gates, 3), (N, num_gates, 4)
-            gate_env_pos = gate_env_pos[env_ids]  # (len(env_ids), num_gates, 3)
-            gate_env_rot = gate_env_rot[env_ids]  # (len(env_ids), num_gates, 4)
-            first_gate_pos = gate_env_pos[:, 0]  # (N, 3)
-            first_gate_rot = gate_env_rot[:, 0]  # (N, 4)
-            
-            # Calculate offset in gate's local frame (behind the gate)
-            # Gate's local x-axis points in the forward direction 
-            
-            # Rotate offset to world frame using gate's orientation
-            # Expand offset_local to match batch size
-            offset_local_expanded = self.offset_local.unsqueeze(0).expand(len(env_ids), -1)  # (N, 3)
-            offset_world = quat_rotate(first_gate_rot, offset_local_expanded)  # (len(env_ids), 3)
+            # Get gate poses and select spawn gate
+            gate_world_pos, gate_world_rot = self.gates.get_world_poses()
+            gate_env_pos, gate_env_rot = self.get_env_poses((gate_world_pos, gate_world_rot))
+            gate_env_pos = gate_env_pos[env_ids]
+            gate_env_rot = gate_env_rot[env_ids]
 
-            # TODO You can comment out lines below for random drone start position
-            # pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
-            # drone_start_pos = first_gate_pos + offset_world + pos_perturbation  # (len(env_ids), 3)
-            drone_start_pos = first_gate_pos + offset_world  # (len(env_ids), 3)
-            
-            drone_start_pos_with_agent = drone_start_pos.unsqueeze(1)  # (len(env_ids), 1, 3)
-            env_positions_with_agent = self.envs_positions[env_ids].unsqueeze(1)  # (len(env_ids), 1, 3)
+            local_ids = torch.arange(len(env_ids), device=self.device)
+            spawn_gate_pos = gate_env_pos[local_ids, spawn_gate_idx]
+            spawn_gate_rot = gate_env_rot[local_ids, spawn_gate_idx]
+
+            # Place drone 1.5 m behind the spawn gate (gate local -x) + small random perturbation
+            offset_local_expanded = self.offset_local.unsqueeze(0).expand(len(env_ids), -1)
+            offset_world = quat_rotate(spawn_gate_rot, offset_local_expanded)
+            pos_perturbation = self.init_pos_dist.sample(env_ids.shape) - self.init_pos_dist.mean
+            drone_start_pos = spawn_gate_pos + offset_world + pos_perturbation
+
+            # Compute spawn gate center (origin is bottom-center; add height/2 in gate-local z)
+            _gc_offset = torch.tensor([0.0, 0.0, self.gate_height / 2.0], device=self.device)
+            _gc_offset_world = quat_rotate(spawn_gate_rot, _gc_offset.unsqueeze(0).expand(len(env_ids), -1))
+            spawn_gate_center = spawn_gate_pos + _gc_offset_world
+
+            # Gate forward axis (local +x) in world frame — used for both lag init and drone yaw
+            gate_forward_reset = quat_rotate(
+                spawn_gate_rot,
+                torch.tensor([1.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(len(env_ids), -1),
+            )
+
+            # Initialize prev_lag so the first step doesn't produce a spurious spike
+            drone_to_spawn_gate = drone_start_pos - spawn_gate_center
+            self.prev_lag[env_ids] = (drone_to_spawn_gate * gate_forward_reset).sum(dim=-1).detach()
+
+            # Orient drone to face through the spawn gate: yaw = gate forward axis heading,
+            # roll/pitch sampled from init_rpy_dist for robustness.
+            gate_yaw = torch.atan2(gate_forward_reset[:, 1], gate_forward_reset[:, 0])
+            drone_rpy = self.init_rpy_dist.sample((*env_ids.shape, 1))
+            drone_rpy[..., 2] = gate_yaw.unsqueeze(1)
+            drone_rot = euler_to_quaternion(drone_rpy)
+
+            first_gate_center = spawn_gate_center
+            first_gate_rot = spawn_gate_rot
 
             self.drone.set_world_poses(
-                drone_start_pos_with_agent + env_positions_with_agent,
-                drone_rot, env_ids
+                drone_start_pos.unsqueeze(1) + self.envs_positions[env_ids].unsqueeze(1),
+                drone_rot,
+                env_ids,
             )
         except Exception as e:
             import traceback
@@ -494,21 +526,19 @@ class DroneRaceEnv(IsaacEnv):
             raise RuntimeError(
                 f"DroneRaceEnv._reset_idx failed (num_envs={self.num_envs}, num_gates={self.num_gates})"
             ) from e
+        # --- STUDENT CODE END (3/3) ---
 
         self.drone.set_velocities(
             torch.zeros(len(env_ids), 1, 6, device=self.device), env_ids
         )
 
-        self.drone.set_joint_positions(torch.zeros(len(env_ids), 1, 4, device=self.device), env_ids)
-        self.drone.set_joint_velocities(torch.zeros(len(env_ids), 1, 4, device=self.device), env_ids)
-
-        gate_center_offset_local = torch.tensor(
-            [0.0, 0.0, self.gate_height / 2.0],
-            device=self.device
+        self.drone.set_joint_positions(
+            torch.zeros(len(env_ids), 1, 4, device=self.device), env_ids
         )
-        gate_center_offset_local_expanded = gate_center_offset_local.unsqueeze(0).expand(len(env_ids), -1)
-        gate_center_offset_world = quat_rotate(first_gate_rot, gate_center_offset_local_expanded)
-        first_gate_center = first_gate_pos + gate_center_offset_world
+        self.drone.set_joint_velocities(
+            torch.zeros(len(env_ids), 1, 4, device=self.device), env_ids
+        )
+
         self.prev_distance_to_gate[env_ids] = torch.norm(
             first_gate_center - drone_start_pos,
             dim=-1
@@ -520,7 +550,7 @@ class DroneRaceEnv(IsaacEnv):
             first_gate_rot, drone_to_first_gate_center
         )  # (len(env_ids), 3)
 
-        self.stats.exclude("success")[env_ids] = 0.
+        self.stats.exclude("success")[env_ids] = 0.0
         self.stats["success"][env_ids] = False
 
     def _pre_sim_step(self, tensordict: TensorDictBase):
@@ -781,8 +811,10 @@ class DroneRaceEnv(IsaacEnv):
         # Shape: (N,) where N == self.num_envs.
         # Type: bool is preferred (True/False); equivalent to 1/0 when cast to int/float.
         # Gate width and height can be accessed by using self.gate_width and self.gate_height.
-        # ----- ADD YOUR GATE-CROSSING MASK CODE BELOW (replace the placeholder) -----
-        gates_passed_successfully = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # ----- START STUDENT CODE -----
+        within_y = torch.abs(curr_in_gate[..., 1]) < (self.gate_width / 2.0)
+        within_z = torch.abs(curr_in_gate[..., 2]) < (self.gate_height / 2.0)
+        gates_passed_successfully = crossed_plane & within_y & within_z
         # ----- END STUDENT CODE -----
         
         gate_passed_this_step = gates_passed_successfully & (~self.gate_passed)

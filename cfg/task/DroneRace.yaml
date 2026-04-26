@@ -30,22 +30,22 @@ save_interval: 100
 # IMPORTANT: The last gate should be the exact same pos and yaw as the first gate. 
 
 # Circular track 
-track_config:
-  "1":
-    pos: [0.0, 0.0, 1.0]
-    yaw: 1.57
-  "2":
-    pos: [5.0, 5.0, 1.0]
-    yaw: 0
-  "3":
-    pos: [10.0, 0.0, 1.0]
-    yaw: -1.57
-  "4":
-    pos: [5.0, -5.0, 1.0]
-    yaw: 3.14  # pi
-  "5":
-    pos: [0.0, 0.0, 1.0]
-    yaw: 1.57
+# track_config:
+#   "1":
+#     pos: [0.0, 0.0, 1.0]
+#     yaw: 1.57
+#   "2":
+#     pos: [5.0, 5.0, 1.0]
+#     yaw: 0
+#   "3":
+#     pos: [10.0, 0.0, 1.0]
+#     yaw: -1.57
+#   "4":
+#     pos: [5.0, -5.0, 1.0]
+#     yaw: 3.14  # pi
+#   "5":
+#     pos: [0.0, 0.0, 1.0]
+#     yaw: 1.57
 
 # Figure 8 
 # track_config:
@@ -72,58 +72,58 @@ track_config:
 #     yaw: 1.57
 
 # Race track
-# track_config:
-#   "1":
-#     pos: [12.5, 2.0, 1.0]
-#     yaw: 3.14
+track_config:
+  "1":
+    pos: [12.5, 2.0, 1.0]
+    yaw: 3.14
 
-#   "2":
-#     pos: [6.5, 6.0, 1.0]
-#     yaw: 2.36
+  "2":
+    pos: [6.5, 6.0, 1.0]
+    yaw: 2.36
 
-#   "3":
-#     pos: [5.5, 14.0, 1.0]
-#     yaw: 2.093
+  "3":
+    pos: [5.5, 14.0, 1.0]
+    yaw: 2.093
 
-#   "4":
-#     pos: [2.5, 24.0, 1.0]
-#     yaw: 1.57
+  "4":
+    pos: [2.5, 24.0, 1.0]
+    yaw: 1.57
 
-#   "5":
-#     pos: [7.5, 30.0, 1.0]
-#     yaw: 6.11
+  "5":
+    pos: [7.5, 30.0, 1.0]
+    yaw: 6.11
 
-#   "6":
-#     pos: [12.2, 22.0, 1.0]
-#     yaw: 6.28
+  "6":
+    pos: [12.2, 22.0, 1.0]
+    yaw: 6.28
 
-#   "7":
-#     pos: [17.5, 30.0, 3.0]
-#     yaw: 7.68
+  "7":
+    pos: [17.5, 30.0, 3.0]
+    yaw: 7.68
 
-#   "8":
-#     pos: [17.5, 30.0, 1.0]
-#     yaw: 4.54
+  "8":
+    pos: [17.5, 30.0, 1.0]
+    yaw: 4.54
 
-#   "9":
-#     pos: [18.0, 22.0, 1.0]
-#     yaw: 4.88
+  "9":
+    pos: [18.0, 22.0, 1.0]
+    yaw: 4.88
 
-#   "10":
-#     pos: [20.5, 14.0, 1.0]
-#     yaw: 4.54
+  "10":
+    pos: [20.5, 14.0, 1.0]
+    yaw: 4.54
 
-#   "11":
-#     pos: [18.5, 6.0, 3.0]
-#     yaw: 3.92
+  "11":
+    pos: [18.5, 6.0, 3.0]
+    yaw: 3.92
 
-#   "12":
-#     pos: [18.5, 6.0, 1.0]
-#     yaw: 3.92
+  "12":
+    pos: [18.5, 6.0, 1.0]
+    yaw: 3.92
 
-#   "13":
-#     pos: [12.5, 2.0, 1.0]
-#     yaw: 3.14
+  "13":
+    pos: [12.5, 2.0, 1.0]
+    yaw: 3.14
     
 # Gate settings
 gate_scale: 1.0
@@ -131,13 +131,23 @@ gate_height: 2.5
 gate_width: 2.5 
 
 # ---- STUDENT EDIT: reward hyperparameters --------------------------------
-# Add one line per reward scale you define in drone_race.py __init__.
-# They are read via cfg.task.get("key", default). Rename / extend as needed.
-#
-reward_example: 0.5          # <-- EDIT or replace with your own reward scales
-# reward_progress_scale: 1.0
-# reward_gate_passage: 10.0
-# reward_crash_scale: 5.0
+# Swift-style competitive drone racing hyperparameters
+w_progress: 2.0
+w_contouring: 0.4  
+w_gate: 10.0
+w_centering: 3.0  
+w_speed: 0.04
+w_time: 0.01 
+w_crash: 10.0          
+w_bypass: 15.0       
+w_smooth: 0.001
+w_completion: 50.0 
+w_approach: 2.0
+w_upright: 1.0
+w_altitude: 0.5
+w_ang_rate: 0.005
+w_stall: 30.0
+stall_patience: 200
 # --------------------------------------------------------------------------
 
 debug_gate_origins: false
