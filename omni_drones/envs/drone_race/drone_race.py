@@ -1108,8 +1108,31 @@ class DroneRaceEnv(IsaacEnv):
         # ----- ADD YOUR REWARD CODE BELOW (replace the placeholder) -----
         #
         drone_up = quat_axis(drone_rot.squeeze(1), axis=2)  # (N, 3)
-        collision_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
-        crashed = collision_forces.squeeze(1).norm(dim=-1) > 1.0          # (N,)
+
+        # Geometric gate collision: check all gates at once via (N, G) batch.
+        # Gate local frame (centered at gate_center):
+        #   x = forward through the opening (perpendicular to gate plane)
+        #   y = horizontal (left-right)
+        #   z = vertical (up-down from center)
+        # Hit = near gate plane AND within outer frame bbox AND outside the opening.
+        gate_frame_thickness = 0.2  # half-thickness of gate frame (metres)
+        drone_expanded = drone_pos_flat.unsqueeze(1).expand(-1, self.num_gates, -1)  # (N, G, 3)
+        drone_to_all_gates = drone_expanded - self.gate_env_centers              # (N, G, 3)
+        drone_in_gate_frames = quat_rotate_inverse(
+            self.gate_env_rot.reshape(-1, 4),
+            drone_to_all_gates.reshape(-1, 3),
+        ).reshape(self.num_envs, self.num_gates, 3)                              # (N, G, 3)
+
+        _t = gate_frame_thickness
+        near_plane   = drone_in_gate_frames[..., 0].abs() < _t
+        within_bbox  = (drone_in_gate_frames[..., 1].abs() < self.gate_width  / 2 + _t) & \
+                       (drone_in_gate_frames[..., 2].abs() < self.gate_height / 2 + _t)
+        in_opening   = (drone_in_gate_frames[..., 1].abs() < self.gate_width  / 2) & \
+                       (drone_in_gate_frames[..., 2].abs() < self.gate_height / 2)
+        gate_collision = (near_plane & within_bbox & ~in_opening).any(dim=-1)   # (N,)
+
+        # Combined crash: hit gate frame, below ground, or flipped inverted.
+        crashed = gate_collision | (drone_pos_flat[:, 2] < 0.15) | (drone_up[:, 2] < -0.1)
 
         #
         # ══════════════════════════════════════════════════════════════════
@@ -1248,7 +1271,6 @@ class DroneRaceEnv(IsaacEnv):
         altitude_bonus = torch.exp(-altitude_err) * self.w_altitude  # (N,)
 
         # 2n. Crash penalty — flat penalty on any collision.
-        crashed = (collision_forces.squeeze(1).norm(dim=-1) > 1.0)
         crash_penalty = -crashed.float() * self.w_crash  # (N,)
 
         # 2o. Progress-based stall — counter increments every step, resets on gate passage.
@@ -1269,20 +1291,20 @@ class DroneRaceEnv(IsaacEnv):
 
         # ── 3. Total reward ──────────────────────────────────────────────
         reward = (
-            upright_bonus           # keep level (bootstrap)
-            + altitude_bonus        # fly at gate height (bootstrap)
+            # upright_bonus           # keep level (bootstrap)
+            # + altitude_bonus        # fly at gate height (bootstrap)
             + approach_reward       # move toward current gate (bootstrap)
-            + progress_reward       # MPCC μ_v·Δθ  — primary racing driver
-            + contouring_penalty    # MPCC q_c·e_c² — stay on racing line
+            # + progress_reward       # MPCC μ_v·Δθ  — primary racing driver
+            # + contouring_penalty    # MPCC q_c·e_c² — stay on racing line
             + gate_bonus            # one-time bonus for passing a gate
             # + centering_bonus       # bonus for centred gate crossing
             # + speed_bonus           # reward fast flight
             + smooth_penalty        # action smoothness
-            + angular_rate_penalty  # discourage spinning
+            # + angular_rate_penalty  # discourage spinning
             + crash_penalty         # penalise crashes
-            + stall_penalty         # grows linearly as drone stalls without gate progress
+            # + stall_penalty         # grows linearly as drone stalls without gate progress
             # + bypass_penalty        # penalise flying around a gate
-            + completion_bonus      # full-lap bonus
+            # + completion_bonus      # full-lap bonus
             + time_penalty          # per-step urgency cost
         )  # (N,)
 

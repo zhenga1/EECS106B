@@ -185,7 +185,7 @@ w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
 # Fires a large penalty and ends the episode after stall_patience steps without
 # passing any gate — catches hovering, circling, and stuck-in-place behaviour.
 w_stall:        5.0   # penalty magnitude when stall fires
-stall_patience: 200    # steps without a gate before stall fires (~2 s at 100 Hz)
+stall_patience: 500    # steps without a gate before stall fires (~2 s at 100 Hz)
 w_stall_step:   0.1    # per-step stall penalty leading up to stall firing (creates "go fast or get penalised" gradient)
 # ──────────────────────────────────────────────────────────────────────────
 
