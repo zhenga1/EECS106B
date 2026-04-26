@@ -29,7 +29,7 @@ import isaacsim.core.utils.prims as prim_utils
 from omni_drones.envs.isaac_env import AgentSpec, IsaacEnv
 from omni_drones.robots.drone import MultirotorBase
 from omni_drones.views import ArticulationView, RigidPrimView
-from omni_drones.utils.torch import euler_to_quaternion, quat_axis
+from omni_drones.utils.torch import euler_to_quaternion, quat_axis, quat_rotate_inverse
 
 from tensordict.tensordict import TensorDict, TensorDictBase
 from torchrl.data import Unbounded, Composite, DiscreteTensorSpec
@@ -301,11 +301,24 @@ class Hover(IsaacEnv):
     def _compute_state_and_obs(self):
         self.drone_state = self.drone.get_state()
 
-        # relative position and heading
+        # relative position and heading (world frame)
         self.rpos = self.target_pos - self.drone_state[..., :3]
         self.rheading = self.target_heading - self.drone_state[..., 13:16]
 
-        obs = [self.rpos, self.drone_state[..., 3:], self.rheading,]
+        # Shared obs format (aligns with DroneRace for transfer learning):
+        #   [0:3]   goal_rpos in drone BODY frame
+        #   [3:23]  drone state without position: rot(4)+vel(6)+heading(3)+up(3)+throttle(4)
+        #   [23:26] goal heading error in drone BODY frame
+        #   [26:30] time encoding (task-specific extra)
+        drone_rot_flat = self.drone.rot.squeeze(1)  # (N, 4), refreshed by get_state()
+        rpos_body = quat_rotate_inverse(
+            drone_rot_flat, self.rpos.squeeze(1)
+        ).unsqueeze(1)  # (N, 1, 3)
+        rheading_body = quat_rotate_inverse(
+            drone_rot_flat, self.rheading.squeeze(1)
+        ).unsqueeze(1)  # (N, 1, 3)
+
+        obs = [rpos_body, self.drone_state[..., 3:], rheading_body]
         if self.time_encoding:
             t = (self.progress_buf / self.max_episode_length).unsqueeze(-1)
             obs.append(t.expand(-1, self.time_encoding_dim).unsqueeze(1))

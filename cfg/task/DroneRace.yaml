@@ -22,7 +22,7 @@ drone_model:
   name: Iris
   controller: RateController
 
-total_frames: 1_000_000_000
+total_frames: 2_000_000_000
 save_interval: 100 
 # seed: 0
 
@@ -142,52 +142,47 @@ gate_width: 2.5
 # (2026), MPPI ref-free (2024), Actor-Critic MPC (TRO 2025), TOGT (2023).
 
 # ── Bootstrap / basic-flight rewards ───────────────────────────────────────
-# Without these, an untrained policy outputs near-zero thrust → drone falls
-# → all episodes identical → return variance ≈ 0 → explained_var = -∞.
-# w_alive pruned (covered by crash_penalty + stall termination)
-w_upright:    0.2    # bonus for drone z-axis pointing up (prevents tumbling)
-w_altitude:   0.5    # exp(-|z - gate_z|) bonus for flying at gate height
-# w_vel_up pruned (redundant with altitude_bonus)
+# Finetuning from Hover: the pre-trained backbone already knows how to fly,
+# so bootstrap weights can be modest — they mainly prevent regressing to
+# ground-crashing if the first-layer adaptation briefly destabilises flight.
+w_upright:    0.3    # keep drone z-axis up; slightly stronger to reinforce Hover prior
+w_altitude:   0.4    # exp(-|z - gate_z|) — guide to gate height
 
 # ── Approach / progress rewards ────────────────────────────────────────────
-w_approach:   1.0    # backup Euclidean approach signal (progress_reward is the main driver)
-w_progress:  8.0    # μ_v — reward per metre of forward progress (Δlag) along racing line
+# Stronger approach+progress than scratch training: the policy already hovers
+# stably so gate-approach is the primary thing to learn.
+w_approach:   2.0    # stronger backup Euclidean approach signal
+w_progress:  10.0    # MPCC Δlag reward — main driver toward each gate
 progress_k:   3
 
 # ── Contouring / lag penalties ─────────────────────────────────────────────
-# Reduced from 0.4 → 0.1: drone must learn to fly first; strong contouring
-# penalty during early training just produces large negative rewards that swamp
-# the sparse gate bonuses and discourage exploration.
-w_contouring: 0.2    # q_c — penalty weight on contouring error² (lateral deviation)
-# w_lag pruned (redundant with progress_reward + contouring_penalty)
+# Raise from 0.2 → 0.35: hover prior means the drone won't fall immediately,
+# so we can afford a tighter contouring penalty to learn clean racing lines.
+w_contouring: 0.35   # q_c — lateral deviation² penalty
 
 # ── Gate / completion bonuses ──────────────────────────────────────────────
-w_gate:       10.0   # one-time bonus for passing through a gate (Swift)
-w_centering:  3.0    # bonus scaled by gate-crossing accuracy (TOGT)
-w_completion: 50.0   # large bonus for completing the full lap
+# Large gate bonus is the key credit-assignment signal for sequential gates.
+w_gate:       15.0   # one-time bonus per gate passed (larger than scratch to prioritise gates)
+w_centering:  4.0    # bonus proportional to crossing accuracy (TOGT)
+w_completion: 80.0   # big lap-completion bonus — strong terminal signal for 13 gates
 
 # ── Speed / time rewards ───────────────────────────────────────────────────
-# Increased w_speed 0.04 → 0.15 and w_time 0.01 → 0.05:
-# these create a "go fast or get penalised" gradient that prevents the policy
-# from learning to hover indefinitely to collect alive_bonus.
-w_speed:      0.15   # reward for speed magnitude (MonoRace / MPPI)
-w_time:       0.30   # per-step cost to encourage speed (Swift) — must make hovering lose money
+w_speed:      0.2    # encourage fast flight (learned hover is too slow for racing)
+w_time:       0.25   # per-step cost — hover strategy must be strictly worse than forward progress
 
 # ── Crash / smoothness ─────────────────────────────────────────────────────
-# Increased w_crash 10 → 20: crash_penalty is now actually applied (it was
-# defined but unused in the reward sum — now fixed in drone_race.py).
-w_crash:      15.0  # flat crash penalty (contact forces > 1 N) — must hurt a lot
-w_bypass:     15.0  # one-time penalty for crossing the gate plane outside the opening
-w_smooth:     0.001  # penalty on action rate-of-change (Swift r_cmd)
-w_ang_rate:   0.005  # penalty on angular rate² (discourages spinning/tumbling)
+w_crash:      20.0   # high crash penalty — finetuned policy should not regress on safety
+w_bypass:     20.0   # strong bypass penalty — bypassing any of the 13 gates is very bad
+w_smooth:     0.001  # action smoothness (small, keep from fighting the hover prior)
+w_ang_rate:   0.008  # angular rate² — slight increase to discourage aggressive roll/pitch
 
 # ── Progress-based stall termination ──────────────────────────────────────
-# Counter increments every step and resets to 0 when a gate is passed.
-# Fires a large penalty and ends the episode after stall_patience steps without
-# passing any gate — catches hovering, circling, and stuck-in-place behaviour.
-w_stall:        15.0  # penalty magnitude when stall fires (must dwarf bootstrap rewards)
-stall_patience: 800   # steps = 8 s sim time; max inter-gate dist ~10m needs ~500+ steps at 2 m/s
-w_stall_step:   0.02  # per-step stall penalty (must be small enough to allow some hovering)
+# Tighter stall_patience than scratch (800 → 500): the hover policy should
+# start making progress within a few seconds, not 8 s.  Shorter stalls →
+# more gate-crossing attempts per hour of compute.
+w_stall:        20.0  # higher penalty magnitude — failure to progress is costly
+stall_patience: 500   # 5 s sim time before stall fires (inter-gate ≤ ~10m at 2 m/s = 5 s)
+w_stall_step:   0.03  # per-step stall penalty — grows pressure over the patience window
 # ──────────────────────────────────────────────────────────────────────────
 
 # ── Trajectory ────────────────────────────────────────────────────────────

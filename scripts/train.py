@@ -116,7 +116,7 @@ def main(cfg):
 
         # ---- CUSTOM ENV OVERRIDE ------------------------------------------------
     import importlib.util as _ilu
-    _custom_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone_race.py")
+    _custom_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../omni_drones/envs/drone_race/drone_race.py")
     if os.path.exists(_custom_path):
         # Remove the existing registration so our custom class can re-register
         # under the same name without hitting the duplicate-name guard in

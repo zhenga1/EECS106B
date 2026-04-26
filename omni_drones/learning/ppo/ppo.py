@@ -60,6 +60,15 @@ class PPOConfig:
     priv_critic: bool = False
 
     checkpoint_path: Union[str, None] = None
+    # When loading a checkpoint from a *different* task (e.g. Hover → DroneRace),
+    # set reset_value_norm=true to discard the old reward-scale statistics so the
+    # critic does not start with a badly miscalibrated baseline.
+    reset_value_norm: bool = False
+    # LR multiplier applied to the input-projection layer when finetuning.
+    # The first linear layer is re-initialised (obs dims differ between tasks),
+    # so it usually needs a higher LR than the transferred hidden layers.
+    # Set > 1.0 to speed up input-layer adaptation while keeping the rest slow.
+    input_layer_lr_scale: float = 1.0
     actor: dict = field(default_factory=lambda: {
         "lr": 5e-4,
         "lr_scheduler": None,
@@ -263,9 +272,78 @@ class PPOPolicy(TensorDictModuleBase):
         self.actor(fake_input)
         self.critic(fake_input)
 
+        # Create value normalizer before checkpoint loading so reset_value_norm works.
+        self.value_norm = ValueNorm1(reward_spec[("agents", "reward")].shape[-2:]).to(self.device)
+
         if self.cfg.checkpoint_path is not None:
-            state_dict = torch.load(self.cfg.checkpoint_path)
-            self.load_state_dict(state_dict, strict=False)
+            import os
+            print("[PPO] Running ppo.py from:", os.path.abspath(__file__))
+            ckpt = torch.load(self.cfg.checkpoint_path, map_location=device)
+
+            # Unwrap common checkpoint formats
+            if isinstance(ckpt, dict):
+                if "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+                    state_dict = ckpt["state_dict"]
+                elif "model" in ckpt and isinstance(ckpt["model"], dict):
+                    state_dict = ckpt["model"]
+                else:
+                    state_dict = ckpt
+            else:
+                raise TypeError(
+                    f"Checkpoint at {self.cfg.checkpoint_path} is not a dict. "
+                    f"Got type: {type(ckpt)}"
+                )
+
+            current_sd = self.state_dict()
+
+            loaded_keys = []
+            skipped_keys = []
+            filtered_sd = {}
+
+            for k, v in state_dict.items():
+                if not torch.is_tensor(v):
+                    skipped_keys.append((k, f"not a tensor ({type(v)})"))
+                    continue
+
+                if k not in current_sd:
+                    skipped_keys.append((k, "missing in current model"))
+                    continue
+
+                if current_sd[k].shape != v.shape:
+                    skipped_keys.append((
+                        k,
+                        f"shape mismatch current={list(current_sd[k].shape)} ckpt={list(v.shape)}"
+                    ))
+                    continue
+
+                filtered_sd[k] = v
+                loaded_keys.append(k)
+
+            # Safety check: absolutely no mismatched tensors should remain
+            bad_keys = [
+                k for k, v in filtered_sd.items()
+                if k not in current_sd or current_sd[k].shape != v.shape
+            ]
+            if bad_keys:
+                raise RuntimeError(f"Filtered state_dict still has bad keys: {bad_keys}")
+
+            print(f"[PPO] About to load {len(filtered_sd)} compatible tensors")
+            if skipped_keys:
+                print(f"[PPO] Skipping {len(skipped_keys)} incompatible/missing tensors:")
+                for k, reason in skipped_keys:
+                    print(f"  SKIP {k}: {reason}")
+
+            # This should never raise a size mismatch now
+            incompatible = self.load_state_dict(filtered_sd, strict=False)
+
+            print(f"[PPO] Missing keys after load: {len(incompatible.missing_keys)}")
+            print(f"[PPO] Unexpected keys after load: {len(incompatible.unexpected_keys)}")
+
+            if self.cfg.reset_value_norm:
+                self.value_norm.running_mean.zero_()
+                self.value_norm.running_mean_sq.fill_(1.0)
+                self.value_norm.debiasing_term.zero_()
+                print("[PPO] Value normalizer reset (cross-task finetune).")
         else:
             print(f"\n\n--------------------")
             print("No model loaded, using an random initial policy")
@@ -279,15 +357,32 @@ class PPOPolicy(TensorDictModuleBase):
             self.actor.apply(init_)
             self.critic.apply(init_)
 
+        # Build per-layer param groups so the input-projection layer can use a
+        # higher LR than the transferred hidden + output layers.
+        input_lr_scale = _cfg_get(cfg, "input_layer_lr_scale", 1.0)
+
+        def _make_param_groups(module, base_lr, wd, scale):
+            """Split first Linear (input projection) from the rest via param IDs."""
+            all_params = list(module.parameters())
+            if scale == 1.0 or not all_params:
+                return [{"params": all_params, "lr": base_lr, "weight_decay": wd}]
+            # Locate the very first nn.Linear in the module tree.
+            first_linear = next((m for m in module.modules() if isinstance(m, nn.Linear)), None)
+            if first_linear is None:
+                return [{"params": all_params, "lr": base_lr, "weight_decay": wd}]
+            input_ids = {id(p) for p in first_linear.parameters()}
+            return [
+                {"params": [p for p in all_params if id(p) in input_ids],
+                 "lr": base_lr * scale, "weight_decay": wd, "name": "input_projection"},
+                {"params": [p for p in all_params if id(p) not in input_ids],
+                 "lr": base_lr, "weight_decay": wd, "name": "backbone"},
+            ]
+
         self.actor_opt = torch.optim.Adam(
-            self.actor.parameters(),
-            lr=actor_lr,
-            weight_decay=actor_weight_decay,
+            _make_param_groups(self.actor, actor_lr, actor_weight_decay, input_lr_scale),
         )
         self.critic_opt = torch.optim.Adam(
-            self.critic.parameters(),
-            lr=critic_lr,
-            weight_decay=critic_weight_decay,
+            _make_param_groups(self.critic, critic_lr, critic_weight_decay, input_lr_scale),
         )
         actor_scheduler_cls = _resolve_scheduler(_cfg_get(actor_cfg, "lr_scheduler", None))
         critic_scheduler_cls = _resolve_scheduler(_cfg_get(critic_cfg, "lr_scheduler", None))
@@ -301,8 +396,6 @@ class PPOPolicy(TensorDictModuleBase):
             self.critic_opt_scheduler = critic_scheduler_cls(
                 self.critic_opt, **(_cfg_get(critic_cfg, "lr_scheduler_kwargs", {}) or {})
             )
-        self.value_norm = ValueNorm1(reward_spec[("agents", "reward")].shape[-2:]).to(self.device)
-
     def __call__(self, tensordict: TensorDict):
         self.actor(tensordict)
         self.critic(tensordict)
@@ -347,8 +440,9 @@ class PPOPolicy(TensorDictModuleBase):
         infos: TensorDict = torch.stack(infos).to_tensordict()
         infos = infos.apply(torch.mean, batch_size=[])
         out = {k: v.item() for k, v in infos.items()}
-        out["actor_lr"] = self.actor_opt.param_groups[0]["lr"]
-        out["critic_lr"] = self.critic_opt.param_groups[0]["lr"]
+        # Report the backbone LR (last group, or only group when no scale split)
+        out["actor_lr"] = self.actor_opt.param_groups[-1]["lr"]
+        out["critic_lr"] = self.critic_opt.param_groups[-1]["lr"]
         return out
 
     def _update(self, tensordict: TensorDict):

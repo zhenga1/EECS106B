@@ -570,16 +570,26 @@ class DroneRaceEnv(IsaacEnv):
 
     def _set_specs(self):
         print(f"[_set_specs DEBUG] Loading from: {__file__}")
-        # Custom robot state: linear_vel(3) + rotation_matrix_flat(9) + angular_vel(3) = 18
-        robot_state_dim = 3 + 9 + 3  # 15
-        # Observation: robot_state(15) + next_gate_rpos_local(3) + next_to_next_gate_pos(3)
-        #              + next_gate_rot_mat_2col(6)
-        observation_dim = robot_state_dim + 3 + 3 + 6
+        # Internal state kept in ("info", "drone_state") for the privileged critic.
+        robot_state_dim = 3 + 9 + 3  # 15: lin_vel + rot_mat + ang_vel
+        # Shared observation format — mirrors Hover exactly for transfer learning:
+        #   [0:3]   next_gate_rpos_local      goal relative position in drone body frame
+        #   [3:7]   rot (quaternion)           \
+        #   [7:13]  vel (6D world-frame)        | drone self-state (20 dims) — identical to
+        #   [13:16] heading                     | Hover's drone_state[3:]
+        #   [16:19] up                          |
+        #   [19:23] throttle (normalised)      /
+        #   [23:26] gate_forward_body          goal direction in drone body frame
+        #   [26:29] n2n_gate_rpos_gate_frame   look-ahead gate position
+        #   [29:30] gate_progress              fraction of lap completed
+        hover_state_dim = 4 + 6 + 3 + 3 + self.drone.num_rotors  # 20 for Iris
+        observation_dim = 3 + hover_state_dim + 3 + 3 + 1        # 30
         print(f"[_set_specs DEBUG] observation_dim = {observation_dim}")
         print("The observation vector consists of:")
-        print(f"  - Robot state: {robot_state_dim}")
-        print(f"  - Next gate relative position: 3")
-        print(f"  - Next to next gate position: 3")
+        print(f"  - next_gate_rpos_body: 3")
+        print(f"  - hover_drone_state: {hover_state_dim}")
+        print(f"  - gate_forward_body: 3")
+        print(f"  - n2n_gate + progress: 4")
         self.observation_spec = (
             Composite(
                 {
@@ -923,6 +933,16 @@ class DroneRaceEnv(IsaacEnv):
             )
         )
 
+        # Recompute gate rpos using gate CENTER (not origin) so the obs points to the
+        # fly-through point, matching Hover's rpos_body which points to the exact goal.
+        # gate_env_centers is cached at init: (N, num_gates, 3), already center positions.
+        batch_indices_obs = torch.arange(self.num_envs, device=self.device)
+        gate_center = self.gate_env_centers[batch_indices_obs, target_gate_indices]  # (N, 3)
+        gate_center_rpos_world = (gate_center - drone_pos.squeeze(1))               # (N, 3)
+        next_gate_rpos_local = quat_rotate_inverse(
+            drone_rot.squeeze(1), gate_center_rpos_world
+        ).unsqueeze(1)  # (N, 1, 3) — gate CENTER in drone body frame
+
         # Get next-to-next gate positions. If the immediate next gate is the last gate, clamp so
         # next-to-next points at the same gate (no wrap-around).
         next_to_next_gate_indices = torch.where(
@@ -935,63 +955,52 @@ class DroneRaceEnv(IsaacEnv):
             next_to_next_gate_indices, gate_env_pos, gate_env_rot, target_gate_indices
         )  # (N, 3)
 
-        # Angle between drone->gate vector and gate normal (gate local +x axis in env frame)
-        gate_normal_local = torch.tensor([1.0, 0.0, 0.0], device=self.device)
-        gate_normal_local_expanded = gate_normal_local.unsqueeze(0).expand(
-            self.num_envs, -1
-        )  # (N, 3)
-        gate_normal_world = quat_rotate(
-            next_gate_rot.squeeze(1), gate_normal_local_expanded
-        )  # (N, 3)
-        gate_vec_world = next_gate_rpos_world.squeeze(1)  # (N, 3)
-        gate_vec_norm = torch.norm(gate_vec_world, dim=-1).clamp_min(1e-6)
-        gate_normal_norm = torch.norm(gate_normal_world, dim=-1).clamp_min(1e-6)
-        cos_angle = (gate_vec_world * gate_normal_world).sum(-1) / (
-            gate_vec_norm * gate_normal_norm
-        )
-        gate_angle = torch.acos(cos_angle.clamp(-1.0, 1.0))  # (N,)
+        # ── Shared observation format (mirrors Hover for transfer learning) ──────
+        # Drone self-state in Hover's encoding: rot(4)+vel_world(6)+heading(3)+up(3)+throttle(4)
+        # Caches are fresh — _build_robot_state() called get_state() above.
+        hover_drone_state = torch.cat([
+            self.drone.rot,                # (N, 1, 4)
+            self.drone.vel,                # (N, 1, 6) world-frame velocity
+            self.drone.heading,            # (N, 1, 3)
+            self.drone.up,                 # (N, 1, 3)
+            self.drone.throttle * 2 - 1,   # (N, 1, num_rotors) normalised
+        ], dim=-1)  # (N, 1, 20)
 
-        # Gate progress: fraction of gates completed in the single lap
-        gate_progress = self.gate_indices.float() / self.num_gates  # (N,)
+        # Gate forward axis (local +x) rotated into drone body frame — the
+        # body-frame analogue of Hover's rheading_body at indices [23:26].
+        drone_rot_flat = drone_rot.squeeze(1)  # (N, 4)
+        gate_forward_world = quat_rotate(
+            next_gate_rot.squeeze(1),
+            torch.tensor([1.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(self.num_envs, -1),
+        )  # (N, 3)
+        gate_forward_body = quat_rotate_inverse(
+            drone_rot_flat, gate_forward_world
+        ).unsqueeze(1)  # (N, 1, 3)
+
+        # Gate progress fraction — the body-frame analogue of Hover's time_encoding
+        # at indices [26:30]: look-ahead gate position (3) + lap progress (1).
         gate_progress = torch.where(
-            track_completed, torch.ones_like(gate_progress), gate_progress
-        )
+            track_completed,
+            torch.ones(self.num_envs, device=self.device),
+            self.gate_indices.float() / self.num_gates,
+        ).unsqueeze(-1).unsqueeze(-1)  # (N, 1, 1)
 
-        # Next gate orientation: first 2 columns of its rotation matrix in the world frame.
-        # Rotate the gate-local x- and y-axes into world coordinates via quat_rotate,
-        # then concatenate to a 6-vector per environment.
-        next_gate_rot_flat = next_gate_rot.squeeze(1)  # (N, 4)
-        e_x = (
-            torch.tensor([1.0, 0.0, 0.0], device=self.device)
-            .unsqueeze(0)
-            .expand(self.num_envs, -1)
-        )  # (N, 3)
-        e_y = (
-            torch.tensor([0.0, 1.0, 0.0], device=self.device)
-            .unsqueeze(0)
-            .expand(self.num_envs, -1)
-        )  # (N, 3)
-        gate_col0 = quat_rotate(
-            next_gate_rot_flat, e_x
-        )  # (N, 3) - gate x-axis in world frame
-        gate_col1 = quat_rotate(
-            next_gate_rot_flat, e_y
-        )  # (N, 3) - gate y-axis in world frame
-        next_gate_rot_mat_2col = torch.cat([gate_col0, gate_col1], dim=-1).unsqueeze(
-            1
-        )  # (N, 1, 6)
-
-        # Build observation
-        # All components need to have the agent dimension (middle dimension) to match spec (N, 1, obs_dim)
-        obs = [
-            self.drone_state,  # (N, 1, state_dim) - already has agent dimension
-            next_gate_rpos_local,  # (N, 1, 3) - already has agent dimension
+        extra = torch.cat([
             next_to_next_gate_pos.unsqueeze(1),  # (N, 1, 3)
-            next_gate_rot_mat_2col,  # (N, 1, 6)
-        ]
+            gate_progress,                        # (N, 1, 1)
+        ], dim=-1)  # (N, 1, 4)
 
-        # Concatenate along last dimension: (N, 1, obs_dim)
-        obs = torch.cat(obs, dim=-1)  # (N, 1, obs_dim)
+        # Build observation — layout matches Hover exactly:
+        #   [0:3]   next_gate_rpos_local  (body frame, cf. Hover's rpos_body)
+        #   [3:23]  hover_drone_state     (IDENTICAL encoding to Hover indices [3:23])
+        #   [23:26] gate_forward_body     (body frame, cf. Hover's rheading_body)
+        #   [26:30] n2n_gate + progress   (task-specific extra)
+        obs = torch.cat([
+            next_gate_rpos_local,   # (N, 1, 3)
+            hover_drone_state,      # (N, 1, 20)
+            gate_forward_body,      # (N, 1, 3)
+            extra,                  # (N, 1, 4)
+        ], dim=-1)  # (N, 1, 30)
 
         return TensorDict(
             {

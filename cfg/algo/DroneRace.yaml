@@ -1,40 +1,54 @@
 name: ppo
 
-# ---- STUDENT EDIT: PPO training schedule ---------------------------------
-train_every: 32   # collect this many env steps before each update
-ppo_epochs: 4      # gradient epochs per update
-# --------------------------------------------------------------------------
-num_minibatches: 5
-clip_param: 0.2
-entropy_coef: 0.003
+# ── Finetuning from Hover checkpoint ──────────────────────────────────────
+# Architecture is locked to [128, 128, 128] to match the Hover checkpoint.
+# Both tasks now share an identical 30-dim observation format:
+#   [0:3]  goal_rpos in body frame   [3:23] hover drone state (rot+vel+hdg+up+thr)
+#   [23:26] goal_dir in body frame   [26:30] task-specific extra
+# Because the obs dims match (both 30), ALL layers transfer — including the
+# first layer (30→128) which previously had to be re-initialised from scratch.
+# The input_layer_lr_scale is reduced to 1.5 (from 3.0) since the first layer
+# now starts from a reasonable Hover prior rather than random init.
+
+train_every: 32
+ppo_epochs: 6
+num_minibatches: 8
+# Tighter clip keeps the pre-trained backbone from drifting too fast.
+clip_param: 0.15
+# Higher entropy encourages exploration of gate-passing behaviour early on.
+entropy_coef: 0.005
 gae_lambda: 0.95
 gamma: 0.99
 max_grad_norm: 5.0
 
-# whether to use privileged information
 priv_actor: false
 priv_critic: false
 
-checkpoint_path:
+# Path to the pre-trained Hover policy.  Weights that match in name+shape
+# are loaded; the rest (input projection, value-norm) are re-initialised.
+checkpoint_path: /home/cc/ee106b/sp26/class/ee106b-aau/EECS106B/wandb/run-20260423_001333-95fgqjdc/files/checkpoint_final.pt
+
+# Reset the value normalizer: Hover reward scale ≠ DroneRace reward scale,
+# so the old running statistics would miscalibrate the critic baseline.
+reset_value_norm: true
+
+# The input-projection layer is randomly initialised (obs mismatch) so give
+# it 3× the backbone LR to let it converge faster.
+input_layer_lr_scale: 1.5
 
 actor:
-  # ---- STUDENT EDIT: actor network --------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
-  hidden_units: [256, 256, 256]  # <-- EDIT: list of hidden layer sizes, e.g. [256, 256, 256]
-  # changing to elu and 4 layers following https://arxiv.org/pdf/2512.11781
-  activation: elu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
-  # -----------------------------------------------------------------------
+  lr: 0.0001
+  hidden_units: [128, 128, 128]
+  activation: relu
   lr_scheduler:
   lr_scheduler_kwargs:
   layer_norm: true
   weight_decay: 0.0
 
 critic:
-  # ---- STUDENT EDIT: critic network -------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
-  hidden_units: [256, 256, 256]  # <-- EDIT: list of hidden layer sizes
-  activation: elu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
-  # -----------------------------------------------------------------------
+  lr: 0.0001
+  hidden_units: [128, 128, 128]
+  activation: relu
   lr_scheduler:
   lr_scheduler_kwargs:
   layer_norm: true
