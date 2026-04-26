@@ -169,6 +169,9 @@ class DroneRaceEnv(IsaacEnv):
         )  # exp bonus for flying at gate height
         self.w_ang_rate = cfg.task.get("w_ang_rate", 0.015)
         self.w_yaw_rate = cfg.task.get("w_yaw_rate", 0.005)
+        self.w_alignment = cfg.task.get(
+            "w_alignment", 0.0
+        )  # reward for velocity direction aligned with path tangent (cosine similarity)
         self.w_stall = cfg.task.get(
             "w_stall", 30.0
         )  # one-time penalty when stall fires
@@ -1290,6 +1293,16 @@ class DroneRaceEnv(IsaacEnv):
         speed = torch.norm(drone_vel_env, dim=-1)  # (N,)
         speed_bonus = speed * self.w_speed  # (N,)
 
+        # 2f2. Velocity alignment bonus — reward flying in the direction of the racing line.
+        # Cosine similarity between velocity direction and path tangent: +1 when perfectly
+        # aligned, 0 when perpendicular, -1 when flying backward. Complements speed_bonus
+        # (which rewards magnitude) and progress_reward (which rewards displacement).
+        # Other groups reported this as a large win: the drone learns direction quality
+        # independently of how fast it's going. Default 0.0 (off) — set w_alignment in YAML.
+        velocity_dir = drone_vel_env / (speed.unsqueeze(-1) + 1e-6)  # (N, 3) unit velocity
+        alignment = (velocity_dir * path_tangent).sum(dim=-1)  # (N,) cosine in [-1, 1]
+        alignment_reward = alignment * self.w_alignment  # (N,)
+
         # 2g. Time penalty  (Swift: small per-step cost)
         time_penalty = -self.w_time * self.w_stall_step # scalar
 
@@ -1358,6 +1371,7 @@ class DroneRaceEnv(IsaacEnv):
             + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
             + gate_bonus  # one-time bonus for passing a gate
             + speed_bonus  # reward fast flight — makes flying beat hovering
+            + alignment_reward  # velocity direction aligned with racing line tangent
             + smooth_penalty  # action smoothness
             + crash_penalty  # penalise crashes
             + stall_penalty  # penalise hovering / flying too low too long
