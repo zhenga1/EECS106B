@@ -101,8 +101,7 @@ class DroneRaceEnv(IsaacEnv):
         self.w_centering = cfg.task.get("w_centering", 3.0)  
         self.w_speed = cfg.task.get("w_speed", 0.04)
         self.w_time = cfg.task.get("w_time", 0.01) 
-        self.w_crash = cfg.task.get("w_crash", 10.0)          
-        self.w_bypass = cfg.task.get("w_bypass", 15.0)       
+        self.w_crash = cfg.task.get("w_crash", 10.0)              
         self.w_smooth = cfg.task.get("w_smooth", 0.001)
         self.w_completion = cfg.task.get("w_completion", 50.0) 
         self.w_approach = cfg.task.get("w_approach", 2.0)  # [KY, Claude] bootstrap signal: reward per metre of approach toward current gate
@@ -170,14 +169,18 @@ class DroneRaceEnv(IsaacEnv):
         print(f"[DroneRaceEnv] num_envs={self.num_envs}, num_gates={self.num_gates}")
         # Track gate progress for each environment
         self.gate_indices = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.start_gate_indices = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.gate_passed = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.gate_bypassed = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.track_completed = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.prev_distance_to_gate = torch.zeros(self.num_envs, device=self.device)
+        self.stall_counter = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.prev_lag = torch.zeros(self.num_envs, device=self.device)
         # Gate crossing detection: drone position in gate frame from previous step
         self.gate_width = cfg.task.get("gate_width", 1.0)
         self.prev_drone_in_gate_frame = torch.zeros(self.num_envs, 3, device=self.device)
         self.last_action = torch.zeros(self.num_envs, 1, self.drone.action_spec.shape[-1], device=self.device)
-        self.effort = torch.zeros(self.num_envs, 1, self.drone.action_spec.shape[-1], device=self.device) 
+        self.effort = torch.zeros(self.num_envs, 1, self.drone.action_spec.shape[-1], device=self.device)
 
         # Use a single view with wildcard pattern to access all gates
         try:

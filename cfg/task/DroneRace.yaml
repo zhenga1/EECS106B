@@ -138,8 +138,7 @@ w_gate: 10.0
 w_centering: 3.0  
 w_speed: 0.04
 w_time: 0.01 
-w_crash: 10.0          
-w_bypass: 15.0       
+w_crash: 10.0             
 w_smooth: 0.001
 w_completion: 50.0 
 w_approach: 2.0
