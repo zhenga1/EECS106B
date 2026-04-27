@@ -37,6 +37,7 @@ from omni_drones.views import ArticulationView, RigidPrimView
 from omni_drones.robots import ASSET_PATH
 
 from pxr import UsdPhysics
+from third_party.IsaacLab.source.isaaclab_tasks.isaaclab_tasks.manager_based.classic.humanoid.mdp.rewards import progress_reward
 
 # Debug visualization
 try:
@@ -108,8 +109,10 @@ class DroneRaceEnv(IsaacEnv):
         self.w_upright   = cfg.task.get("w_upright", 1.0)   # bonus for keeping z-axis pointing up
         self.w_altitude  = cfg.task.get("w_altitude", 0.5)  # exp bonus for flying at gate height
         self.w_ang_rate        = cfg.task.get("w_ang_rate", 0.005)
-        self.w_stall        = cfg.task.get("w_stall", 30.0)             # one-time penalty when stall fires
-        self.stall_patience = int(cfg.task.get("stall_patience", 200))  # steps without a gate before stall fires
+        self.w_stall        = cfg.task.get("w_stall", 30.0)
+        self.stall_patience = int(cfg.task.get("stall_patience", 150))
+        self.w_bypass       = cfg.task.get("w_bypass", 15.0)
+        self.w_yaw_rate     = cfg.task.get("w_yaw_rate", 0.001)
         # Legacy aliases so the crash section and other code still works
         self.reward_crash_scale = self.w_crash
         # ----- END STUDENT CODE -----
@@ -435,6 +438,15 @@ class DroneRaceEnv(IsaacEnv):
             "crashed_distance": Unbounded(1),
             "success": BinaryDiscreteTensorSpec(1, dtype=bool),
             "truncated":  Unbounded(1),
+            # per-term reward accumulators
+            "r_progress":   Unbounded(1),
+            "r_contouring": Unbounded(1),
+            "r_gate":       Unbounded(1),
+            "r_smooth":     Unbounded(1),
+            "r_crash":      Unbounded(1),
+            "r_completion": Unbounded(1),
+            "r_upright":    Unbounded(1),
+            "r_time":       Unbounded(1),
         }).expand(self.num_envs).to(self.device)
         self.observation_spec["stats"] = stats_spec
         self.stats = stats_spec.zero()
@@ -892,31 +904,108 @@ class DroneRaceEnv(IsaacEnv):
 
         # -----------------------------------------------------------------------
         # STUDENT TODO (2/3): Implement your reward function.
-        #
-        # Variables available in this scope:
-        #   drone_pos_flat        (N, 3)    drone position in env frame
-        #   drone_rot             (N, 1, 4) drone orientation quaternion (w, x, y, z)
-        #   distance_to_gate      (N,)      Euclidean distance to current gate centre
-        #   current_gate_center   (N, 3)    3-D centre of the current target gate
-        #   gate_passed_this_step (N,)      bool – True when drone just passed a gate
-        #   gate_index_changed    (N,)      bool – True when target gate index advanced
-        #   new_gate_center       (N, 3)    centre of the (possibly new) target gate
-        #   crashed_collision     (N,)      bool – True when contact forces are detected
-        #   self.drone.vel        (N, 1, 6) [lin_vel(3) | ang_vel(3)] in body frame
-        #   self.gate_indices     (N,)      index of current target gate (0…num_gates-1)
-        #   self.track_completed  (N,)      bool – True when the full lap is done
-        #
-        # Useful helpers (already imported at top of file):
-        #   quat_axis(q, axis)          extract body axis vector (0=x, 1=y, 2=z)
-        #   quat_rotate(q, v)           rotate vector v by quaternion q
-        #   quat_rotate_inverse(q, v)   rotate vector v by inverse of quaternion q
-        #
-        # Your reward scalars are loaded in __init__ (STUDENT TODO 1/3) and
-        # configured in cfg/task/DroneRace.yaml.
         # -----------------------------------------------------------------------
-        # ----- ADD YOUR REWARD CODE BELOW (replace the placeholder) -----
+        # Precompute all gate centers in env frame (N, G, 3)
+        off_z = torch.tensor([0., 0., self.gate_height / 2.], device=self.device)
+        off_z_exp = off_z.unsqueeze(0).expand(self.num_envs * self.num_gates, -1)
+        gate_env_centers = (
+            gate_env_pos.reshape(-1, 3)
+            + quat_rotate(gate_env_rot.reshape(-1, 4), off_z_exp)
+        ).reshape(self.num_envs, self.num_gates, 3)
 
-        reward = torch.zeros(self.num_envs, device=self.device)  # (N,) ← replace this
+        # ---------------------------- MPCC -------------------------------------
+        prev_gate_idx = torch.clamp(self.gate_indices - 1, min=0)  # (N,)
+        seg_start = gate_env_centers[batch_indices, prev_gate_idx]  # (N, 3)
+        seg_end   = gate_env_centers[batch_indices, self.gate_indices]  # (N, 3)
+        seg_dir = seg_end - seg_start
+        seg_len = torch.norm(seg_dir, dim=-1, keepdim=True).clamp(min=1e-6)
+        path_tangent = seg_dir / seg_len  # (N, 3) unit tangent along segment
+        # Degenerate case (gate_idx == 0): use gate's forward axis as tangent.
+        is_first_gate = self.gate_indices == 0
+        gate_fwd_local = torch.tensor([1., 0., 0.], device=self.device)
+        gate_forward = quat_rotate(
+            current_gate_rot,
+            gate_fwd_local.unsqueeze(0).expand(self.num_envs, -1),
+        )  # (N, 3)
+        path_tangent = torch.where(is_first_gate.unsqueeze(-1), gate_forward, path_tangent)
+
+        # Project drone onto the racing-line segment.
+        drone_to_start = drone_pos_flat - seg_start  # (N, 3)
+        lag = torch.sum(drone_to_start * path_tangent, dim=-1)  # (N,)
+        contouring_vec = drone_to_start - lag.unsqueeze(-1) * path_tangent  # (N, 3)
+
+        # Contouring error
+        contouring_err = torch.norm(contouring_vec, dim=-1)  # (N,)
+        contouring_penalty = -contouring_err.pow(2) * self.w_contouring
+
+        # Progress reward:
+        delta_lag = (lag - self.prev_lag).clamp(min=-1.0)
+        progress_reward = delta_lag * self.w_progress * (~gate_index_changed).float()
+        # ---------------------------- MPCC -------------------------------------
+
+        # gate bonus
+        gate_bonus = gate_passed_this_step.float() * self.w_gate
+
+        # time penalty
+        time_penalty = -self.w_time
+
+        # Action smoothness penalty
+        current_action = self.drone.get_joint_velocities()  # (N, 1, num_joints)
+        action_diff = torch.norm((current_action - self.last_action).squeeze(1), dim=-1)  # (N,)
+        smooth_penalty = -action_diff * self.w_smooth
+
+        # compeltion bonus
+        completion_bonus = track_completed.float() * self.w_completion
+
+        # Upright bonus
+        drone_rot_flat = drone_rot.squeeze(1)   
+        drone_up = quat_axis(drone_rot_flat, axis=2)  # (N, 3) body z-axis in world frame
+        upright_bonus = drone_up[:, 2] * self.w_upright
+
+        # Crash
+        collision_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
+        crashed = (collision_forces.squeeze(1).norm(dim=-1) > 1.0)
+        crash_penalty = -crashed.float() * self.w_crash  # (N,)
+
+        # angular rate penalty
+        # ang_vel_body = self.drone.vel[..., 3:6].squeeze(1)  # (N, 3) body-frame angular vel
+        # roll_rate  = ang_vel_body[..., 0]
+        # pitch_rate = ang_vel_body[..., 1]
+        # yaw_rate   = ang_vel_body[..., 2]
+        # angular_rate_penalty = (
+        #     -self.w_ang_rate * (roll_rate.pow(2) + pitch_rate.pow(2))
+        #     - self.w_yaw_rate * yaw_rate.pow(2)
+        # )
+
+        # Stall
+        # self.stall_counter = torch.where(
+        #     gate_passed_this_step,
+        #     torch.zeros_like(self.stall_counter),
+        #     self.stall_counter + 1,
+        # )
+        # stall_triggered = self.stall_counter >= self.stall_patience  # (N,)
+        # stall_penalty = -stall_triggered.float() * self.w_stall  # (N,)
+
+        reward = (
+            progress_reward  # primary racing driver: Δlag along racing line
+            + gate_bonus  # one-time bonus for passing a gate
+            + smooth_penalty  # action smoothness
+            + crash_penalty  # penalise crashes
+            # + stall_penalty  # penalise hovering / flying too low too long
+            + completion_bonus  # full-lap bonus
+
+            + upright_bonus  # keep drone z-axis pointing up (bootstrap)
+            + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
+            + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
+        )
+
+        # ── 4. Update state for next step ────────────────────────────────
+        self.prev_distance_to_gate = torch.norm(
+            drone_pos_flat - new_gate_center, dim=-1
+        ).detach()
+        # Zero prev_lag on gate transitions: avoids cross-frame subtraction at step t+1.
+        self.prev_lag = torch.where(gate_index_changed, torch.zeros_like(lag), lag).detach()
+        self.last_action = current_action.detach()
 
         # ----- END STUDENT CODE -----
 
@@ -926,12 +1015,14 @@ class DroneRaceEnv(IsaacEnv):
         # -----------------------------------------------------------------------
         # ----- ADD YOUR CRASH CONDITION BELOW (replace the placeholder) -----
 
-        crashed = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)  # (N,) ← replace this
-
+        # CALCULATED IN REWARD FUNCTION:
+        # collision_forces = self.drone.base_link.get_net_contact_forces()  # (N, 1, 3)
+        # crashed = collision_forces.squeeze(1).norm(dim=-1) > 1.0  # (N,)
+        
         # ----- END STUDENT CODE -----
         truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
         completed_task = self.track_completed
-        done = truncated | completed_task.unsqueeze(-1) | crashed.unsqueeze(-1)
+        done = truncated | completed_task.unsqueeze(-1) | crashed.unsqueeze(-1) # | stall_triggered.unsqueeze(-1)
 
         # --- stats ---
         self.stats["truncated"].add_(truncated.float())
@@ -939,8 +1030,22 @@ class DroneRaceEnv(IsaacEnv):
         self.stats["success"].bitwise_or_(completed_task.unsqueeze(-1))
         self.stats["return"].add_(reward.unsqueeze(-1))
         self.stats["episode_len"][:] = self.progress_buf.unsqueeze(1)
-        self.stats["gates_passed"][:] = (self.gate_indices + self.track_completed.long()).float().unsqueeze(1)
-        # (optional) add extra stat tracking lines here if you add new metrics
+        gates_since_spawn = (self.gate_indices - self.start_gate_indices).clamp(min=0)
+        self.stats["gates_passed"][:] = (
+            gates_since_spawn
+            + self.track_completed.long()
+            * (self.num_gates - 1 - self.start_gate_indices)
+        ).float().unsqueeze(1)
+        # per-term reward accumulators
+        self.stats["r_progress"].add_(progress_reward.unsqueeze(-1))
+        self.stats["r_contouring"].add_(contouring_penalty.unsqueeze(-1))
+        self.stats["r_gate"].add_(gate_bonus.unsqueeze(-1))
+        self.stats["r_smooth"].add_(smooth_penalty.unsqueeze(-1))
+        self.stats["r_crash"].add_(crash_penalty.unsqueeze(-1))
+        self.stats["r_completion"].add_(completion_bonus.unsqueeze(-1))
+        self.stats["r_upright"].add_(upright_bonus.unsqueeze(-1))
+        self.stats["r_time"].add_(torch.full((self.num_envs, 1), float(time_penalty), device=self.device))
+        
 
         return TensorDict(
             {
