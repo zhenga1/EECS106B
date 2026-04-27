@@ -21,7 +21,7 @@ checkpoint_path:
 
 actor:
   # ---- STUDENT EDIT: actor network --------------------------------------
-  lr: 0.0002                   # <-- EDIT: learning rate
+  lr: 0.0003                   # <-- EDIT: learning rate
   hidden_units: [512, 512, 512] # ablation winner: [256,256]→[512,512,512] was single biggest win
   activation: relu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
@@ -34,7 +34,7 @@ actor:
 
 critic:
   # ---- STUDENT EDIT: critic network -------------------------------------
-  lr: 0.0002                   # <-- EDIT: learning rate
+  lr: 0.0003                   # <-- EDIT: learning rate
   hidden_units: [512, 512, 512] # match actor depth
   activation: relu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------

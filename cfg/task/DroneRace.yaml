@@ -11,7 +11,7 @@ ppo_cfg: DroneRace.yaml
 
 env:
   num_envs: 500            # <-- EDIT: number of parallel environments
-  max_episode_length: 500 # <-- EDIT: max steps per episode before truncation
+  max_episode_length: 5000 # <-- EDIT: max steps per episode before truncation
 
 sim:
   substeps: 5   # overrides the default of 5
@@ -132,21 +132,24 @@ gate_width: 2.5
 
 # ---- STUDENT EDIT: reward hyperparameters --------------------------------
 # Swift-style competitive drone racing hyperparameters
-w_progress: 2.0
-w_contouring: 0.4  
-w_gate: 10.0
-w_centering: 3.0  
-w_speed: 0.04
-w_time: 0.01 
-w_crash: 10.0             
+w_progress: 8.0        # primary dense signal: ~0.06/step at 3m/s approach
+w_contouring: 0.2     # was 0.4: at 1m lateral error → -0.05/step (not -0.4)
+w_gate: 0.0            # was 10.0 remove gate-dominance: sparse bonus ≈ 4 gate-intervals of dense progress
+w_centering: 1.5       # was 3.0: fires only at gate cross, scale halved
+w_speed: 0.15          # was 0.04: at 5m/s → 0.05/step, complementary to progress
+w_time: 0.30          # was 0.01: small constant pressure
+w_crash: 8.0          # was 10.0: terminal penalty now matches w_completion scale
 w_smooth: 0.001
-w_completion: 50.0 
-w_approach: 2.0
-w_upright: 1.0
-w_altitude: 0.5
-w_ang_rate: 0.005
-w_stall: 30.0
-stall_patience: 200
+w_completion: 50.0
+w_approach: 0.0        # deprecated: same signal as w_progress, zeroed to avoid conflict
+w_upright: 0.2       # was 1.0: per-step term — old value → 500/episode (10x gate bonus!)
+w_altitude: 0.5      # was 0.5: per-step term — old value → 250/episode
+w_ang_rate: 0.005      # was 0.005: slight reduction
+w_bypass: 15.0         # one-time penalty for overshooting gate without passing
+w_stall: 15.0
+stall_patience: 800    # was 200: 1.5s of no progress triggers stall
+
+w_alignment:  0.3    # reward for velocity direction aligned with path tangent (cosine similarity)
 # --------------------------------------------------------------------------
 
 debug_gate_origins: false
