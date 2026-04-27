@@ -1365,36 +1365,36 @@ class DroneRaceEnv(IsaacEnv):
         altitude_bonus = torch.exp(-altitude_err.pow(2) * 0.5) * self.w_altitude  # (N,)
 
         # ── 3. Total reward ──────────────────────────────────────────────
-        # reward = (
-        #     progress_reward  # primary racing driver: Δlag along racing line
-        #     + approach_reward  # backup Euclidean approach signal
-        #     + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
-        #     + gate_bonus  # one-time bonus for passing a gate
-        #     + speed_bonus  # reward fast flight — makes flying beat hovering
-        #     + alignment_reward  # velocity direction aligned with racing line tangent
-        #     + smooth_penalty  # action smoothness
-        #     + crash_penalty  # penalise crashes
-        #     + stall_penalty  # penalise hovering / flying too low too long
-        #     + completion_bonus  # full-lap bonus
-        #     + upright_bonus  # keep drone z-axis pointing up (bootstrap)
-        #     + altitude_bonus  # fly at gate height (bootstrap)
-        #     + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
-        # )  # (N,)
-
-
         reward = (
             progress_reward  # primary racing driver: Δlag along racing line
+            + approach_reward  # backup Euclidean approach signal
+            + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
             + gate_bonus  # one-time bonus for passing a gate
+            + speed_bonus  # reward fast flight — makes flying beat hovering
+            + alignment_reward  # velocity direction aligned with racing line tangent
             + smooth_penalty  # action smoothness
             + crash_penalty  # penalise crashes
-            # + stall_penalty  # penalise hovering / flying too low too long
+            + stall_penalty  # penalise hovering / flying too low too long
             + completion_bonus  # full-lap bonus
-            + alignment_reward
-
             + upright_bonus  # keep drone z-axis pointing up (bootstrap)
-            + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
-            # + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
-        )
+            + altitude_bonus  # fly at gate height (bootstrap)
+            + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
+        )  # (N,)
+
+
+        # reward = (
+        #     progress_reward  # primary racing driver: Δlag along racing line
+        #     + gate_bonus  # one-time bonus for passing a gate
+        #     + smooth_penalty  # action smoothness
+        #     + crash_penalty  # penalise crashes
+        #     # + stall_penalty  # penalise hovering / flying too low too long
+        #     + completion_bonus  # full-lap bonus
+        #     + alignment_reward
+
+        #     + upright_bonus  # keep drone z-axis pointing up (bootstrap)
+        #     + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
+        #     # + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
+        # )
 
 
         # ── 4. Update state for next step ────────────────────────────────
