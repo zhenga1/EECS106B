@@ -22,6 +22,7 @@
 
 
 import imp
+from turtle import speed
 import torch
 import torch.distributions as D
 from tensordict.tensordict import TensorDict, TensorDictBase
@@ -113,6 +114,8 @@ class DroneRaceEnv(IsaacEnv):
         self.stall_patience = int(cfg.task.get("stall_patience", 150))
         self.w_bypass       = cfg.task.get("w_bypass", 15.0)
         self.w_yaw_rate     = cfg.task.get("w_yaw_rate", 0.001)
+        self.w_alignment = cfg.task.get("w_alignment", 0.0)  # reward for velocity direction aligned with path tangent (cosine similarity)
+
         # Legacy aliases so the crash section and other code still works
         self.reward_crash_scale = self.w_crash
         # ----- END STUDENT CODE -----
@@ -949,6 +952,13 @@ class DroneRaceEnv(IsaacEnv):
         # time penalty
         time_penalty = -self.w_time
 
+        # velocity
+        drone_vel_body = self.done.vel[..., :3].squeeze(1)  # (N, 3) body-frame linear velocity
+        drone_vel_env = quat_rotate(drone_rot_flat, drone_vel_body)
+        velocity_dir = drone_vel_env / (speed.unsqueeze(-1) + 1e-6)  # (N, 3) unit velocity
+        alignment = (velocity_dir * path_tangent).sum(dim=-1)  # (N,) cosine in [-1, 1]
+        alignment_reward = alignment * self.w_alignment  # (N,)
+
         # Action smoothness penalty
         current_action = self.drone.get_joint_velocities()  # (N, 1, num_joints)
         action_diff = torch.norm((current_action - self.last_action).squeeze(1), dim=-1)  # (N,)
@@ -993,10 +1003,11 @@ class DroneRaceEnv(IsaacEnv):
             + crash_penalty  # penalise crashes
             # + stall_penalty  # penalise hovering / flying too low too long
             + completion_bonus  # full-lap bonus
+            + alignment_reward
 
             + upright_bonus  # keep drone z-axis pointing up (bootstrap)
             + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
-            + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
+            # + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
         )
 
         # ── 4. Update state for next step ────────────────────────────────
