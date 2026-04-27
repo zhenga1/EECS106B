@@ -8,7 +8,7 @@ num_minibatches: 5
 clip_param: 0.2
 entropy_coef: 0.01       # start high for exploration — cosine-annealed down to entropy_coef_min
 entropy_coef_min: 0.0001  # final value after annealing (near-zero = exploitation)
-entropy_anneal_steps: 30000  # train-call steps over which to anneal (~half a full 1B-frame run)
+entropy_anneal_steps: 5000   # 100M frames / (500envs × 32 steps) ≈ 6250 train calls total; 5000 ≈ 80% of run
 gae_lambda: 0.95
 gamma: 0.995  # longer credit-assignment horizon: 200 steps (2s) vs 100 steps (1s) at 0.99 — ablation showed this + wider network is superadditive
 max_grad_norm: 5.0
@@ -23,7 +23,7 @@ actor:
   # ---- STUDENT EDIT: actor network --------------------------------------
   lr: 0.0003                   # <-- EDIT: learning rate
   hidden_units: [512, 512, 512] # ablation winner: [256,256]→[512,512,512] was single biggest win
-  activation: relu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
+  activation: elu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
   lr_scheduler: CosineAnnealingLR
   lr_scheduler_kwargs:
@@ -36,7 +36,7 @@ critic:
   # ---- STUDENT EDIT: critic network -------------------------------------
   lr: 0.0003                   # <-- EDIT: learning rate
   hidden_units: [512, 512, 512] # match actor depth
-  activation: relu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
+  activation: elu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
   lr_scheduler: CosineAnnealingLR
   lr_scheduler_kwargs:
