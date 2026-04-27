@@ -2,6 +2,9 @@ export EECS106B_DIR="/workspace/omni_drones"
 export ISAACSIM_PATH="/workspace/isaacsim"
 source "$ISAACSIM_PATH/setup_conda_env.sh"
 
+# Keep our local repo first so it wins over the system omni_drones that Isaac Sim injects
+export PYTHONPATH="$EECS106B_DIR:$PYTHONPATH"
+
 cd $EECS106B_DIR
 
 # check if venv exists at /opt/venv/bin/activate. If it does activate it. If it does't create a new venv at that location 

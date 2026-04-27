@@ -11,7 +11,7 @@ ppo_cfg: DroneRace.yaml
 
 env:
   num_envs: 500            # <-- EDIT: number of parallel environments
-  max_episode_length: 500 # <-- EDIT: max steps per episode before truncation
+  max_episode_length: 1000 # <-- EDIT: max steps per episode before truncation
 
 sim:
   substeps: 5   # overrides the default of 5
@@ -21,7 +21,7 @@ drone_model:
   name: Iris
   controller: RateController
 
-total_frames: 200_000_000
+total_frames: 20_000_000
 save_interval: 100 
 # seed: 0
 
@@ -30,22 +30,22 @@ save_interval: 100
 # IMPORTANT: The last gate should be the exact same pos and yaw as the first gate. 
 
 # Circular track 
-track_config:
-  "1":
-    pos: [0.0, 0.0, 1.0]
-    yaw: 1.57
-  "2":
-    pos: [5.0, 5.0, 1.0]
-    yaw: 0
-  "3":
-    pos: [10.0, 0.0, 1.0]
-    yaw: -1.57
-  "4":
-    pos: [5.0, -5.0, 1.0]
-    yaw: 3.14  # pi
-  "5":
-    pos: [0.0, 0.0, 1.0]
-    yaw: 1.57
+#track_config:
+#  "1":
+#    pos: [0.0, 0.0, 1.0]
+#    yaw: 1.57
+#  "2":
+#    pos: [5.0, 5.0, 1.0]
+#    yaw: 0
+#  "3":
+#    pos: [10.0, 0.0, 1.0]
+#    yaw: -1.57
+#  "4":
+#    pos: [5.0, -5.0, 1.0]
+#    yaw: 3.14  # pi
+#  "5":
+#    pos: [0.0, 0.0, 1.0]
+#    yaw: 1.57
 
 # Figure 8 
 # track_config:
@@ -72,58 +72,58 @@ track_config:
 #     yaw: 1.57
 
 # Race track
-# track_config:
-#   "1":
-#     pos: [12.5, 2.0, 1.0]
-#     yaw: 3.14
+track_config:
+  "1":
+    pos: [12.5, 2.0, 1.0]
+    yaw: 3.14
 
-#   "2":
-#     pos: [6.5, 6.0, 1.0]
-#     yaw: 2.36
+  "2":
+    pos: [6.5, 6.0, 1.0]
+    yaw: 2.36
 
-#   "3":
-#     pos: [5.5, 14.0, 1.0]
-#     yaw: 2.093
+  "3":
+    pos: [5.5, 14.0, 1.0]
+    yaw: 2.093
 
-#   "4":
-#     pos: [2.5, 24.0, 1.0]
-#     yaw: 1.57
+  "4":
+    pos: [2.5, 24.0, 1.0]
+    yaw: 1.57
 
-#   "5":
-#     pos: [7.5, 30.0, 1.0]
-#     yaw: 6.11
+  "5":
+    pos: [7.5, 30.0, 1.0]
+    yaw: 6.11
 
-#   "6":
-#     pos: [12.2, 22.0, 1.0]
-#     yaw: 6.28
+  "6":
+    pos: [12.2, 22.0, 1.0]
+    yaw: 6.28
 
-#   "7":
-#     pos: [17.5, 30.0, 3.0]
-#     yaw: 7.68
+  "7":
+    pos: [17.5, 30.0, 3.0]
+    yaw: 7.68
 
-#   "8":
-#     pos: [17.5, 30.0, 1.0]
-#     yaw: 4.54
+  "8":
+    pos: [17.5, 30.0, 1.0]
+    yaw: 4.54
 
-#   "9":
-#     pos: [18.0, 22.0, 1.0]
-#     yaw: 4.88
+  "9":
+    pos: [18.0, 22.0, 1.0]
+    yaw: 4.88
 
-#   "10":
-#     pos: [20.5, 14.0, 1.0]
-#     yaw: 4.54
+  "10":
+    pos: [20.5, 14.0, 1.0]
+    yaw: 4.54
 
-#   "11":
-#     pos: [18.5, 6.0, 3.0]
-#     yaw: 3.92
+  "11":
+    pos: [18.5, 6.0, 3.0]
+    yaw: 3.92
 
-#   "12":
-#     pos: [18.5, 6.0, 1.0]
-#     yaw: 3.92
+  "12":
+    pos: [18.5, 6.0, 1.0]
+    yaw: 3.92
 
-#   "13":
-#     pos: [12.5, 2.0, 1.0]
-#     yaw: 3.14
+  "13":
+    pos: [12.5, 2.0, 1.0]
+    yaw: 3.14
     
 # Gate settings
 gate_scale: 1.0

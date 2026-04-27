@@ -145,10 +145,10 @@ class DroneRaceEnv(IsaacEnv):
         import traceback
         import sys
         
-        print(f"[DroneRaceEnv] Initializing, num_gates={self.num_gates}")
+        print(f"[JohnDroneRaceEnv] Initializing, num_gates={self.num_gates}")
         try:
             super().__init__(cfg, headless)
-            print(f"[DroneRaceEnv] super().__init__ completed")
+            print(f"[JohnDroneRaceEnv] super().__init__ completed")
         except Exception as e:
             print("=" * 80)
             print("ERROR: Failed in super().__init__")
@@ -159,7 +159,7 @@ class DroneRaceEnv(IsaacEnv):
 
         try:
             self.drone.initialize(track_contact_forces=True)
-            print(f"[DroneRaceEnv] drone.initialize() completed")
+            print(f"[JohnDroneRaceEnv] drone.initialize() completed")
         except Exception as e:
             print("=" * 80)
             print("ERROR: Failed to initialize drone")
@@ -170,7 +170,7 @@ class DroneRaceEnv(IsaacEnv):
 
         self.hover_cmd_thrust = None
 
-        print(f"[DroneRaceEnv] num_envs={self.num_envs}, num_gates={self.num_gates}")
+        print(f"[JohnDroneRaceEnv] num_envs={self.num_envs}, num_gates={self.num_gates}")
         # Track gate progress for each environment
         self.gate_indices = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.gate_passed = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -184,16 +184,16 @@ class DroneRaceEnv(IsaacEnv):
 
         # Use a single view with wildcard pattern to access all gates
         try:
-            print(f"[DroneRaceEnv] Creating RigidPrimView with pattern='/World/envs/env_*/Gate_*', shape=[{self.num_envs}, {self.num_gates}]")
+            print(f"[JohnDroneRaceEnv] Creating RigidPrimView with pattern='/World/envs/env_*/Gate_*', shape=[{self.num_envs}, {self.num_gates}]")
             self.gates = RigidPrimView(
                 "/World/envs/env_*/Gate_*",
                 reset_xform_properties=False,
                 shape=[self.num_envs, self.num_gates],
                 track_contact_forces=False
             )
-            print(f"[DroneRaceEnv] RigidPrimView created, calling initialize()...")
+            print(f"[JohnDroneRaceEnv] RigidPrimView created, calling initialize()...")
             self.gates.initialize()
-            print(f"[DroneRaceEnv] gates.initialize() completed")
+            print(f"[JohnDroneRaceEnv] gates.initialize() completed")
         except Exception as e:
             print("=" * 80)
             print(f"ERROR: Failed to initialize gates view with num_envs={self.num_envs}, num_gates={self.num_gates}")

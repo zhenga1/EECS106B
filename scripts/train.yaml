@@ -41,5 +41,5 @@ wandb:
 
 defaults:
   - task: DroneRace
-  - algo: sac
+  - algo: ppo
   - _self_

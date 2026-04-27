@@ -19,9 +19,9 @@ checkpoint_path:
 
 actor:
   # ---- STUDENT EDIT: actor network --------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
+  lr: 0.002                # <-- EDIT: learning rate
   hidden_units: [256, 256]  # <-- EDIT: list of hidden layer sizes, e.g. [256, 256, 256]
-  activation: relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
+  activation: elu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
   lr_scheduler:
   lr_scheduler_kwargs:
@@ -30,9 +30,9 @@ actor:
 
 critic:
   # ---- STUDENT EDIT: critic network -------------------------------------
-  lr: 0.0002                # <-- EDIT: learning rate
+  lr: 0.002                # <-- EDIT: learning rate
   hidden_units: [256, 256]  # <-- EDIT: list of hidden layer sizes
-  activation: relu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
+  activation: elu          # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
   lr_scheduler:
   lr_scheduler_kwargs:

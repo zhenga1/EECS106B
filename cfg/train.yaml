@@ -29,6 +29,6 @@ wandb:
   tags:
 
 defaults:
-  - task: Hover
-  - algo: mappo
+  - task: DroneRace
+  - algo: ppo
   - _self_

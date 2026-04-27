@@ -259,7 +259,7 @@ class IsaacEnv(EnvBase):
             except Exception as e:
                 logging.warning(f"Failed to stop/clear simulation: {e}")
             
-            self._is_closed = True
+            self._is_closed =IsaacEnv True
             logging.info("IsaacEnv closed.")
 
     def _reset(self, tensordict: TensorDictBase, **kwargs) -> TensorDictBase:

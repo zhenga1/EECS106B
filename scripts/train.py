@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import wandb
 import matplotlib.pyplot as plt
+import pathlib
 
 from torch.func import vmap
 from tqdm import tqdm
@@ -37,6 +38,8 @@ from setproctitle import setproctitle
 from torchrl.envs.transforms import TransformedEnv, InitTracker, Compose
 
 
+
+
 # def set_global_reproducibility(seed: int, deterministic: bool = True):
 #     """Seed common RNGs and opt into deterministic torch kernels."""
 #     random.seed(seed)
@@ -45,6 +48,16 @@ from torchrl.envs.transforms import TransformedEnv, InitTracker, Compose
 #     if torch.cuda.is_available():
 #         torch.cuda.manual_seed(seed)
 #         torch.cuda.manual_seed_all(seed)
+
+# Isaac Sim modifies sys.path at startup and can push the system omni_drones
+    # in front of our local editable install. Re-insert our repo root first so
+    # that all subsequent omni_drones submodule imports (envs, etc.) use local code.
+import sys as _sys
+FILE_PATH = os.path.dirname(__file__)
+REPO_ROOT = pathlib.Path(FILE_PATH).resolve().parent
+
+if str(REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(REPO_ROOT))
 
 @hydra.main(version_base=None, config_path=".", config_name="train")
 def main(cfg):
@@ -71,6 +84,7 @@ def main(cfg):
     # set_global_reproducibility(cfg.seed, deterministic=cfg.get("deterministic", True))
 
     simulation_app = init_simulation_app(cfg)
+
     run = init_wandb(cfg)
     setproctitle(run.name)
     print(OmegaConf.to_yaml(cfg))
@@ -109,6 +123,13 @@ def main(cfg):
     signal.signal(signal.SIGTERM, signal_handler)
 
     from omni_drones.envs.isaac_env import IsaacEnv
+
+    import omni_drones.envs.isaac_env as _ie_mod
+    import omni_drones.envs.drone_race.drone_race as _dr_mod
+    print(f"[DEBUG] IsaacEnv loaded from: {_ie_mod.__file__}")
+    print(f"[DEBUG] drone_race loaded from: {_dr_mod.__file__}")
+    print(f"Available environments: {list(IsaacEnv.REGISTRY.keys())}")
+    print(f"Creating environment: {cfg.task.name}")
 
     env_class = IsaacEnv.REGISTRY[cfg.task.name]
     base_env = env_class(cfg, headless=cfg.headless)
