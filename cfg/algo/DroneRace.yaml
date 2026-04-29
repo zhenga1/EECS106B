@@ -6,7 +6,7 @@ ppo_epochs: 4     # was 8 — 8×5=40 gradient steps per rollout caused policy o
 # --------------------------------------------------------------------------
 num_minibatches: 4
 clip_param: 0.15  # was 0.2 — tighter clip reduces variance in policy updates
-entropy_coef: 0.01       # start high for exploration — cosine-annealed down to entropy_coef_min
+entropy_coef: 0.05       # start high for exploration — cosine-annealed down to entropy_coef_min
 entropy_coef_min: 0.0001  # final value after annealing (near-zero = exploitation)
 entropy_anneal_steps: 5000   # 100M frames / (500envs × 32 steps) ≈ 6250 train calls total; 5000 ≈ 80% of run
 gae_lambda: 0.95
@@ -25,7 +25,7 @@ actor:
   hidden_units: [512, 512, 512] # ablation winner: [256,256]→[512,512,512] was single biggest win
   activation: elu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
   # -----------------------------------------------------------------------
-  lr_scheduler: CosineAnnealingLR
+  lr_scheduler: 
   lr_scheduler_kwargs:
     T_max: 50000    # ~full 1B-frame run at 500 envs × train_every=32
     eta_min: 0.00002  # decay to 10% of initial lr
@@ -37,8 +37,9 @@ critic:
   lr: 0.0003                   # <-- EDIT: learning rate
   hidden_units: [512, 512, 512] # match actor depth
   activation: elu              # <-- EDIT: relu, leaky_relu, elu, gelu, tanh, silu
-  # -----------------------------------------------------------------------
-  lr_scheduler: CosineAnnealingLR
+  # ----------------------------------------------------------------------- 
+  # CosineAnnealingLR
+  lr_scheduler: 
   lr_scheduler_kwargs:
     T_max: 50000
     eta_min: 0.00002

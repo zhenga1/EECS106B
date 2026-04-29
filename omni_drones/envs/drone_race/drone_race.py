@@ -21,8 +21,6 @@
 # SOFTWARE.
 
 
-import imp
-from turtle import speed
 import torch
 import torch.distributions as D
 from tensordict.tensordict import TensorDict, TensorDictBase
@@ -38,7 +36,6 @@ from omni_drones.views import ArticulationView, RigidPrimView
 from omni_drones.robots import ASSET_PATH
 
 from pxr import UsdPhysics
-from third_party.IsaacLab.source.isaaclab_tasks.isaaclab_tasks.manager_based.classic.humanoid.mdp.rewards import progress_reward
 
 # Debug visualization
 try:
@@ -463,6 +460,9 @@ class DroneRaceEnv(IsaacEnv):
 
     def _reset_idx(self, env_ids: torch.Tensor):
         self.drone._reset_idx(env_ids)
+
+        # --- STUDENT CODE START (0/3): Reset  stall counter ---
+        self.stall_counter[env_ids] = 0
 
         # --- STUDENT CODE START (1/3): Reset gate progress and spawn position ---
         # Pick a random spawn gate per env (exclude last gate — lap-closure duplicate of gate 0)
@@ -953,7 +953,7 @@ class DroneRaceEnv(IsaacEnv):
 
         # Progress reward:
         delta_lag = (lag - self.prev_lag).clamp(min=-1.0)
-        progress_reward = delta_lag * self.w_progress * (~gate_index_changed).float()
+        progress_reward = delta_lag * self.w_progress
         # ---------------------------- MPCC -------------------------------------
 
         # gate bonus
@@ -990,7 +990,11 @@ class DroneRaceEnv(IsaacEnv):
         drone_in_gate_frame = quat_rotate_inverse(current_gate_rot, drone_to_gate)  # (N, 3)
         gate_sigma = (self.gate_width + self.gate_height) / 4.0  # ~half the avg gate dimension
         centering_err_2d = torch.norm(drone_in_gate_frame[..., 1:3], dim=-1)  # (N,) lateral offset
-        centering = torch.exp(-centering_err_2d.pow(2) / (gate_sigma ** 2 + 1e-6)) * self.w_centering
+        
+        forward_dist = drone_in_gate_frame[..., 0].abs()      # distance along gate axis
+        approach_dist = drone_in_gate_frame[..., 0]            # signed: negative = approaching
+        in_approach = (approach_dist < 0.0) & (forward_dist < 5.0)  # approaching, within 5m
+        centering = torch.exp(-centering_err_2d.pow(2) / (2.0 * gate_sigma**2 + 1e-6)) * self.w_centering * in_approach.float()
 
         # Smoothness reward: exp decay on body linear jerk + angular rate
         # Translation: reward low linear acceleration (velocity change per step)
@@ -1022,7 +1026,7 @@ class DroneRaceEnv(IsaacEnv):
         # The floor crash condition handles being too low.
         gate_z = current_gate_center[:, 2]                                    # (N,)
         altitude_err = drone_pos_flat[:, 2] - gate_z                          # (N,) signed error
-        altitude_penalty = self.w_altitude * torch.exp(-altitude_err.pow(2) * 2.0)  # Gaussian, σ≈0.7m
+        altitude_penalty = self.w_altitude * torch.exp(-altitude_err.pow(2) * 2.0)
 
         # angular rate penalty
         # ang_vel_body = self.drone.vel[..., 3:6].squeeze(1)  # (N, 3) body-frame angular vel
@@ -1056,7 +1060,7 @@ class DroneRaceEnv(IsaacEnv):
             + centering
             + upright_bonus      # keep drone z-axis pointing up (bootstrap)
             # + altitude_penalty   # penalise being below gate height (discourages falling)
-            + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
+            # + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
             + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
         )
 
@@ -1108,6 +1112,7 @@ class DroneRaceEnv(IsaacEnv):
         self.stats["r_time"].add_(torch.full((self.num_envs, 1), float(time_penalty), device=self.device))
         self.stats["r_altitude"].add_(altitude_penalty.unsqueeze(-1))
         self.stats["r_proximity"].add_(proximity_reward.unsqueeze(-1))
+        self.stats["r_centering"].add_(centering.unsqueeze(-1))
         self.stats["z_height"].add_(drone_pos[..., 2])  # track altitude for diagnostics
         
 

@@ -133,11 +133,11 @@ gate_width: 2.5
 # ---- STUDENT EDIT: reward hyperparameters --------------------------------
 # Swift-style competitive drone racing hyperparameters
 w_progress: 5.0        # primary dense signal
-w_contouring: 0.001    # squared-error: 0.01×err²/step; at 1m→-0.01, at 5m→-0.25 (was 1.0→-5000/ep at 1m!)
+w_contouring: 0.01    # squared-error: 0.01×err²/step; at 1m→-0.01, at 5m→-0.25 (was 1.0→-5000/ep at 1m!)
 w_gate: 10.0
 w_centering: 1.5
 w_speed: 0.001          # per-step; at 5m/s → 0.05/step → 250/ep max
-w_time: 0.005          # constant drain; 0.005×5000=25/ep (was 0.30→1500/ep)
+w_time: 0.01          # constant drain; 0.005×5000=25/ep (was 0.30→1500/ep)
 w_crash: 8.0
 w_smooth: 0.1
 w_completion: 50.0
