@@ -967,7 +967,10 @@ class DroneRaceEnv(IsaacEnv):
         dir_to_gate = (current_gate_center - drone_pos_flat) / (distance_to_gate.unsqueeze(-1) + 1e-6)
         cos_approach = (dir_to_gate * gate_forward).sum(dim=-1)   # (N,) — 1.0 = on-axis approach
         in_cone = cos_approach > self.proximity_cone_cos           # (N,) hard cone mask
-        proximity_reward = self.w_proximity * in_cone.float() / distance_to_gate.clamp(min=0.5)
+        # Zero out proximity when drone is very close (< 1m): prevents hover-at-gate attractor.
+        # The gate bonus covers the final approach; proximity only guides the far-field approach.
+        far_enough = distance_to_gate > 1.0
+        proximity_reward = self.w_proximity * (in_cone & far_enough).float() / distance_to_gate.clamp(min=0.5)
 
         # time penalty
         time_penalty = -self.w_time
@@ -1014,12 +1017,12 @@ class DroneRaceEnv(IsaacEnv):
         crashed = crashed_contact | crashed_floor
         crash_penalty = -crashed.float() * self.w_crash
 
-        # Altitude penalty: continuous cost proportional to how far below gate height the drone is.
-        # This replaces the bootstrap problem — discourages sitting on the ground or falling
-        # without needing to already know how to navigate gates.
-        gate_z = current_gate_center[:, 2]                          # (N,) target altitude
-        altitude_err = (drone_pos_flat[:, 2] - gate_z).clamp(max=0)  # only penalise being BELOW gate
-        altitude_penalty = self.w_altitude * altitude_err            # (N,) always ≤ 0
+        # Altitude reward: Gaussian peak at gate height, falls to 0 above/below.
+        # Always non-negative — rewards flying at gate height, never penalises directly.
+        # The floor crash condition handles being too low.
+        gate_z = current_gate_center[:, 2]                                    # (N,)
+        altitude_err = drone_pos_flat[:, 2] - gate_z                          # (N,) signed error
+        altitude_penalty = self.w_altitude * torch.exp(-altitude_err.pow(2) * 2.0)  # Gaussian, σ≈0.7m
 
         # angular rate penalty
         # ang_vel_body = self.drone.vel[..., 3:6].squeeze(1)  # (N, 3) body-frame angular vel
@@ -1031,14 +1034,15 @@ class DroneRaceEnv(IsaacEnv):
         #     - self.w_yaw_rate * yaw_rate.pow(2)
         # )
 
-        # Stall
-        # self.stall_counter = torch.where(
-        #     gate_passed_this_step,
-        #     torch.zeros_like(self.stall_counter),
-        #     self.stall_counter + 1,
-        # )
-        # stall_triggered = self.stall_counter >= self.stall_patience  # (N,)
-        # stall_penalty = -stall_triggered.float() * self.w_stall  # (N,)
+        # Stall: counter resets on gate passage; terminates + penalises if stall_patience steps pass.
+        # This directly breaks the hover-near-gate local optimum.
+        self.stall_counter = torch.where(
+            gate_passed_this_step,
+            torch.zeros_like(self.stall_counter),
+            (self.stall_counter + 1).clamp(max=self.stall_patience),
+        )
+        stall_triggered = self.stall_counter >= self.stall_patience  # (N,)
+        stall_penalty = -stall_triggered.float() * self.w_stall
 
         reward = (
             progress_reward  # primary racing driver: Δlag along racing line
@@ -1046,14 +1050,14 @@ class DroneRaceEnv(IsaacEnv):
             + proximity_reward  # 1/r within approach cone
             + smooth_reward   # body motion smoothness
             + crash_penalty  # penalise crashes
-            # + stall_penalty  # penalise hovering / flying too low too long
+            + stall_penalty   # gate-passage stall termination
             + completion_bonus  # full-lap bonus
             + alignment_reward
             + centering
             + upright_bonus      # keep drone z-axis pointing up (bootstrap)
-            + altitude_penalty   # penalise being below gate height (discourages falling)
+            # + altitude_penalty   # penalise being below gate height (discourages falling)
             + contouring_penalty  # MPCC q_c·e_c² — stay on racing line
-            # + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
+            + time_penalty  # per-step cost — must exceed bootstrap to discourage hovering
         )
 
         # ── 4. Update state for next step ────────────────────────────────
@@ -1079,7 +1083,7 @@ class DroneRaceEnv(IsaacEnv):
         # ----- END STUDENT CODE -----
         truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
         completed_task = self.track_completed
-        done = truncated | completed_task.unsqueeze(-1) | crashed.unsqueeze(-1) # | stall_triggered.unsqueeze(-1)
+        done = truncated | completed_task.unsqueeze(-1) | crashed.unsqueeze(-1) | stall_triggered.unsqueeze(-1)
 
         # --- stats ---
         self.stats["truncated"].add_(truncated.float())

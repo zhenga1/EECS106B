@@ -2,10 +2,10 @@ name: ppo
 
 # ---- STUDENT EDIT: PPO training schedule ---------------------------------
 train_every: 32   # <-- EDIT: collect this many env steps before each update
-ppo_epochs: 8     # <-- EDIT: number of gradient epochs per update
+ppo_epochs: 4     # was 8 — 8×5=40 gradient steps per rollout caused policy oscillation
 # --------------------------------------------------------------------------
-num_minibatches: 5
-clip_param: 0.2
+num_minibatches: 4
+clip_param: 0.15  # was 0.2 — tighter clip reduces variance in policy updates
 entropy_coef: 0.01       # start high for exploration — cosine-annealed down to entropy_coef_min
 entropy_coef_min: 0.0001  # final value after annealing (near-zero = exploitation)
 entropy_anneal_steps: 5000   # 100M frames / (500envs × 32 steps) ≈ 6250 train calls total; 5000 ≈ 80% of run

@@ -145,8 +145,8 @@ w_upright: 0.002       # per-step; 0.002×5000=10/ep max (was 1.0→5000/ep!)
 w_altitude: 0.005      # per-step; exp decay, max 0.005×5000=25/ep
 w_ang_rate: 0.003
 w_bypass: 15.0
-w_stall: 15.0
-stall_patience: 800
+w_stall: 30.0          # must exceed accumulated proximity reward during stall window
+stall_patience: 300    # ~3s without a gate → episode ends (was 800: too lenient)
 
 w_alignment: 0.3      # cosine similarity of velocity to path tangent; in [-1,1]×0.3/step
 w_proximity: 1.0      # 1/r reward within approach cone; max = w_proximity/0.5 = 2.0 at 0.5m

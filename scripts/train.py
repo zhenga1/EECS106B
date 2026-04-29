@@ -1,10 +1,21 @@
+import pathlib
 import logging
 import os
 import random
 import signal
+import sys
 import time
 import yaml
 import traceback
+
+# Ensure the local omni_drones package (with student reward implementation)
+# takes precedence over the system-installed one at /workspace/omni_drones/.
+# This MUST happen before any `from omni_drones import ...` line, because
+# Python caches the package path in sys.modules on first import.
+FILE_PATH = os.path.dirname(__file__)
+REPO_ROOT = pathlib.Path(FILE_PATH).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import hydra
 import torch

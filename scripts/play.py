@@ -1,3 +1,6 @@
+import pathlib
+import sys
+sys.path
 import logging
 import os
 import time
@@ -59,9 +62,6 @@ def main(cfg):
     print(OmegaConf.to_yaml(cfg))
 
     from omni_drones.envs.isaac_env import IsaacEnv
-    import pdb
-    pdb.set_trace()
-
         # ---- CUSTOM ENV OVERRIDE ------------------------------------------------
     import importlib.util as _ilu
     _custom_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../omni_drones/envs/drone_race/drone_race.py")
